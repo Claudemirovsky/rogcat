@@ -32,6 +32,7 @@ pub struct Filter {
     tag_ignore_case: FilterGroup,
     message: FilterGroup,
     message_ignore_case: FilterGroup,
+    pid: FilterGroup,
     regex: FilterGroup,
 }
 
@@ -40,6 +41,7 @@ pub fn from_args_profile(args: &ArgMatches<'_>, profile: &Profile) -> Result<Fil
     let tag_ignorecase = profile.tag_ignore_case.iter().map(String::as_str);
     let message = profile.message.iter().map(String::as_str);
     let message_ignorecase = profile.message_ignore_case.iter().map(String::as_str);
+    let pid = profile.pid.iter().map(String::as_str);
     let regex = profile.regex.iter().map(String::as_str);
     let filter = Filter {
         level: Level::from(args.value_of("level").unwrap_or("")),
@@ -52,6 +54,7 @@ pub fn from_args_profile(args: &ArgMatches<'_>, profile: &Profile) -> Result<Fil
             message_ignorecase,
             true,
         )?,
+        pid: FilterGroup::from_args(args, "pid", pid, false)?,
         regex: FilterGroup::from_args(args, "regex_filter", regex, false)?,
     };
 
@@ -63,11 +66,11 @@ impl Filter {
         if record.level < self.level {
             return false;
         }
-
         self.message.filter(&record.message)
             && self.message_ignore_case.filter(&record.message)
             && self.tag.filter(&record.tag)
             && self.tag_ignore_case.filter(&record.tag)
+            && self.pid.filter(&record.process)
             && (self.regex.filter(&record.process)
                 || self.regex.filter(&record.thread)
                 || self.regex.filter(&record.tag)
