@@ -18,7 +18,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use crate::profiles::Profile;
+use crate::{profiles::Profile, reader::get_processes_pids};
 use clap::ArgMatches;
 use failure::{format_err, Error};
 use regex::Regex;
@@ -33,15 +33,29 @@ pub struct Filter {
     message: FilterGroup,
     message_ignore_case: FilterGroup,
     pid: FilterGroup,
+    process_name: FilterGroup,
     regex: FilterGroup,
 }
 
-pub fn from_args_profile(args: &ArgMatches<'_>, profile: &Profile) -> Result<Filter, Error> {
+fn get_all_pids(args: &ArgMatches<'_>, profile: &mut Profile) {
+    if let Some(processes) = args.values_of("process_name") {
+        processes.for_each(|proc| profile.process_name.push(proc.to_string()));
+    }
+    if !profile.process_name.is_empty() {
+        profile
+            .pid
+            .extend(get_processes_pids(&profile.process_name));
+    }
+}
+
+pub fn from_args_profile(args: &ArgMatches<'_>, profile: &mut Profile) -> Result<Filter, Error> {
+    get_all_pids(args, profile);
+    let pid = profile.pid.iter().map(String::as_str);
+    let process_name = profile.process_name.iter().map(String::as_str);
     let tag = profile.tag.iter().map(String::as_str);
     let tag_ignorecase = profile.tag_ignore_case.iter().map(String::as_str);
     let message = profile.message.iter().map(String::as_str);
     let message_ignorecase = profile.message_ignore_case.iter().map(String::as_str);
-    let pid = profile.pid.iter().map(String::as_str);
     let regex = profile.regex.iter().map(String::as_str);
     let filter = Filter {
         level: Level::from(args.value_of("level").unwrap_or("")),
@@ -55,6 +69,7 @@ pub fn from_args_profile(args: &ArgMatches<'_>, profile: &Profile) -> Result<Fil
             true,
         )?,
         pid: FilterGroup::from_args(args, "pid", pid, false)?,
+        process_name: FilterGroup::from_args(args, "process_name", process_name, false)?,
         regex: FilterGroup::from_args(args, "regex_filter", regex, false)?,
     };
 
@@ -62,10 +77,49 @@ pub fn from_args_profile(args: &ArgMatches<'_>, profile: &Profile) -> Result<Fil
 }
 
 impl Filter {
-    pub fn filter(&self, record: &Record) -> bool {
+    pub fn filter(&mut self, record: &Record) -> bool {
         if record.level < self.level {
             return false;
         }
+
+        match record.tag.as_ref() {
+            "am_proc_start" => {
+                let parts = record.message.splitn(5, ',').collect::<Vec<&str>>();
+                let pid = parts[1];
+                let name = parts[3];
+                if self.process_name.filter(name)
+                    && !self
+                        .pid
+                        .positive
+                        .iter()
+                        // Prevents adding duplicates
+                        .any(|x| x.to_string().contains(pid))
+                {
+                    self.pid.positive.push(Regex::new(pid).unwrap());
+                    return true;
+                }
+            }
+            "am_kill" | "am_proc_died" => {
+                let parts = record.message.splitn(3, ',').collect::<Vec<&str>>();
+                let pid = parts[1];
+                if self.pid.filter(pid) {
+                    if let Ok(index) = self
+                        .pid
+                        .positive
+                        .binary_search_by_key(&pid.to_string(), |x| x.to_string())
+                    {
+                        self.pid.positive.remove(index);
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        if !self.process_name.positive.is_empty() && self.pid.positive.is_empty() {
+            return false;
+        }
+
         self.message.filter(&record.message)
             && self.message_ignore_case.filter(&record.message)
             && self.tag.filter(&record.tag)

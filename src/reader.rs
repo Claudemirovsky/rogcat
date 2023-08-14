@@ -137,6 +137,41 @@ pub fn tcp(addr: &Url) -> Result<LogStream, Error> {
     Ok(Box::new(s))
 }
 
+pub fn get_processes_pids(processes: &[String]) -> Vec<String> {
+    let mut command = Command::new(adb().expect("Failed to find adb"))
+        .arg("shell")
+        .arg("ps")
+        .arg("-Ao")
+        .arg("pid,args")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn_async()
+        .expect("Failed to launch adb");
+    let stdout = BufReader::new(command.stdout().take().unwrap());
+    let mut items: Vec<String> = vec![];
+    let future = tokio::io::lines(stdout)
+        .skip(1)
+        .filter(|l| !l.is_empty())
+        .filter(|l| !l.starts_with("* daemon"))
+        .filter_map(move |line| {
+            let mut split = line.split_whitespace();
+            let pid: &str = split.next().unwrap_or("unknown");
+            let name: &str = split.next().unwrap_or("unknown");
+            if processes.contains(&name.to_string()) {
+                Some(pid.to_string())
+            } else {
+                None
+            }
+        })
+        .for_each(|pid| {
+            items.push(pid);
+            Ok(())
+        });
+
+    tokio::runtime::current_thread::block_on_all(future).expect("Runtime error");
+    items
+}
+
 /// Start a process and stream it stdout
 pub fn logcat(args: &ArgMatches) -> Result<LogStream, Error> {
     let mut cmd = vec![adb()?.display().to_string()];

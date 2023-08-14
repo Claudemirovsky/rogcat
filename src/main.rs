@@ -77,7 +77,7 @@ fn run() -> Result<(), Error> {
         }
     };
 
-    let profile = profiles::from_args(&args)?;
+    let mut profile = profiles::from_args(&args)?;
     let sink = if args.is_present("output") {
         filewriter::try_from(&args)?
     } else {
@@ -89,7 +89,7 @@ fn run() -> Result<(), Error> {
         .value_of("head")
         .map(|v| usize::from_str(v).expect("Invalid head arguement"));
 
-    let filter = filter::from_args_profile(&args, &profile)?;
+    let mut filter = filter::from_args_profile(&args, &mut profile)?;
     let mut parser = parser::Parser::default();
 
     let mut runtime = Runtime::new()?;
