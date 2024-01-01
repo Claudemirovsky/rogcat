@@ -505,7 +505,7 @@ table tr td:first-child + td + td + td + td + td {
 {{#each records as |t| ~}}
     <tr>
     <td>{{t.index}}</td>
-    <td>{{t.record.timestamp}}</td>
+    <td>{{t.record.time}}</td>
     <td><a>{{color t.record.tag}}</a></td>
     <td>{{color t.record.process}}</td>
     <td>{{color t.record.thread}}</td>

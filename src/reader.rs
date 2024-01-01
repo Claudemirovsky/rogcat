@@ -27,7 +27,7 @@ use clap::{value_t, ArgMatches};
 use failure::{err_msg, format_err, Error};
 use futures::{stream::iter_ok, Async, Future, Stream};
 #[cfg(target_os = "linux")]
-use rogcat::record::{Record, Timestamp};
+use rogcat::record::Record;
 use std::{
     borrow::ToOwned,
     convert::Into,
@@ -100,13 +100,15 @@ pub fn can(dev: &str) -> Result<LogStream, Error> {
                 .map(|b| format!("{:02x}", b))
                 .collect::<Vec<String>>();
             let extended = if s.is_extended() { "E" } else { " " };
+            let time = time::strftime("%s.%f", &now).ok();
+
             StreamData::Record(Record {
-                timestamp: Some(Timestamp::new(now)),
+                time: time.to_owned(),
                 message: format!("{} {} ", extended, data.join(" ")),
                 tag: format!("0x{:x}", s.id()),
                 raw: format!(
                     "({}) {} {}#{}",
-                    now.strftime("%s.%f").unwrap(),
+                    &time.unwrap(),
                     process,
                     if s.is_extended() {
                         format!("{:08X}", s.id())

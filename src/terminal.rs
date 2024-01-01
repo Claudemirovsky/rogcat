@@ -60,10 +60,17 @@ pub fn try_from(args: &ArgMatches<'_>, profile: &Profile) -> Result<LogSink, Err
     })))
 }
 
+#[derive(PartialEq)]
+enum DateFormat {
+    Complete,
+    Nothing,
+    HourOnly,
+    DateOnly,
+}
 /// Human readable terminal output
 struct Human {
     writer: BufferWriter,
-    date_format: Option<(&'static str, usize)>,
+    date_format: DateFormat,
     highlight: Vec<Regex>,
     process_width: usize,
     tag_width: Option<usize>,
@@ -105,14 +112,14 @@ impl Human {
             args.is_present("show_date") || config_get("terminal_show_date").unwrap_or(false);
         let date_format = if show_date {
             if hide_timestamp {
-                Some(("%m-%d", 5))
+                DateFormat::DateOnly
             } else {
-                Some(("%m-%d %H:%M:%S.%f", 12 + 1 + 5))
+                DateFormat::Complete
             }
         } else if hide_timestamp {
-            None
+            DateFormat::Nothing
         } else {
-            Some(("%H:%M:%S.%f", 12))
+            DateFormat::HourOnly
         };
 
         let bright_colors = args.is_present("bright_colors")
@@ -172,17 +179,18 @@ impl Human {
     }
 
     fn print(&mut self, record: &Record) -> Result<(), Error> {
-        let timestamp = if let Some((format, len)) = self.date_format {
-            if let Some(ref ts) = record.timestamp {
-                let mut ts = time::strftime(format, ts).expect("Date format error");
-                ts.truncate(len);
-                ts
-            } else {
-                " ".repeat(len)
+        let timestamp = if self.date_format != DateFormat::Nothing {
+            let time = record.time.to_owned().unwrap_or_default();
+            match self.date_format {
+                DateFormat::Complete => Some(time),
+                DateFormat::DateOnly => time.get(0..5).map(str::to_string),
+                DateFormat::HourOnly => time.get(6..).map(str::to_string),
+                _ => None,
             }
         } else {
-            String::new()
-        };
+            None
+        }
+        .unwrap_or_default();
 
         let tag_width = self.tag_width();
         let tag_chars = record.tag.chars().count();

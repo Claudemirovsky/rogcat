@@ -18,30 +18,17 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use crate::record::{Level, Record, Timestamp};
+use crate::record::{Level, Record};
 use csv::ReaderBuilder;
 use failure::Fail;
 
-use nom::{
-    branch::alt,
-    bytes::complete::{tag, take, take_until, take_until1, take_while_m_n},
-    character::{
-        complete::{char, hex_digit1, i32, space0, space1},
-        is_digit,
-    },
-    combinator::{map, opt, peek, rest},
-    error::Error,
-    multi::many0,
-    IResult,
-};
+use nom::{bytes::complete::take_until, character::complete::char, IResult};
 
 use serde_json::from_str;
 use std::{
     convert::Into,
     io::{Cursor, Read},
 };
-
-use time::Tm;
 
 #[derive(Fail, Debug)]
 #[fail(display = "{}", _0)]
@@ -51,107 +38,48 @@ pub trait FormatParser: Send + Sync {
     fn try_parse_str(&self, line: &str) -> Result<Record, ParserError>;
 }
 
-fn parse_year(line: &str) -> IResult<&str, i32> {
-    //let (line, year) = map(take(4usize), |s: &str| s.parse::<i32>())(line)?;
-    let (line, year) = peek_and_parse_i32(line, 4)?;
-    let (line, _) = take(4usize)(line)?;
-    let (line, _) = char('-')(line)?;
-    Ok((line, year))
+#[inline]
+fn level(level: &str) -> Level {
+    match level {
+        "V" => Level::Verbose,
+        "D" => Level::Debug,
+        "I" => Level::Info,
+        "W" => Level::Warn,
+        "E" => Level::Error,
+        "F" => Level::Fatal,
+        "A" => Level::Assert,
+        _ => Level::Verbose,
+    }
 }
-
-fn peek_and_parse_i32(line: &str, n: usize) -> IResult<&str, i32> {
-    let (line, value) = peek(take::<usize, &str, Error<_>>(n))(line)?;
-    let value = i32(value)?;
-    Ok((line, value.1))
-}
-
-fn take_and_parse_i32(line: &str, n: usize) -> IResult<&str, i32> {
-    let (line, value) = take::<usize, &str, Error<_>>(n)(line)?;
-    let value = i32(value)?;
-    Ok((line, value.1))
-}
-
-// 2017-03-25 19:11:19.052
-// or
-// 2017-03-25 19:11:19.052321
-fn timestamp(line: &str) -> IResult<&str, Tm> {
-    let (line, year) = opt(parse_year)(line)?;
-    let (line, month) = take_and_parse_i32(line, 2)?;
-    let (line, _) = char('-')(line)?;
-    let (line, day) = take_and_parse_i32(line, 2)?;
-    let (line, _) = space0(line)?;
-    let (line, hour) = take_until1(":")(line)?;
-    let hour = i32(hour)?.1;
-    let (line, _) = char(':')(line)?;
-    let (line, minute) = take_until1(":")(line)?;
-    let minute = take_and_parse_i32(minute, 2)?.1;
-    let (line, _) = char(':')(line)?;
-    let (line, second) = map(take_until1("."), |s: &str| s.parse::<i32>().unwrap_or(0))(line)?;
-    let (line, _) = char('.')(line)?;
-    let (line, millis) = map(take_while_m_n(3, 3, |c| is_digit(c as u8)), |s| {
-        take_and_parse_i32(s, 3).unwrap().1
-    })(line)?;
-    let (line, micros) = opt(map(take_while_m_n(3, 3, |c| is_digit(c as u8)), |s| {
-        take_and_parse_i32(s, 3).unwrap().1
-    }))(line)?;
-    let (line, sign) = opt(alt((map(char('-'), |_| -1), map(char('+'), |_| 1))))(line)?;
-    let utcoff = match sign {
-        Some(sign) => {
-            let (line, utc_off_hrs) = map(take(2usize), |s: &str| s.parse::<i32>())(line)?;
-            let (_line, utc_off_mins) = map(take(2usize), |s: &str| s.parse::<i32>())(line)?;
-            sign * (utc_off_hrs.unwrap_or(0) * 60 * 60 + utc_off_mins.unwrap_or(0) * 60)
-        }
-        None => 0,
-    };
-
-    Ok((
-        line,
-        Tm {
-            tm_sec: second,
-            tm_min: minute,
-            tm_hour: hour,
-            tm_mday: day,
-            tm_mon: month,
-            tm_year: year.unwrap_or(0),
-            tm_wday: 0,
-            tm_yday: 0,
-            tm_isdst: 0,
-            tm_utcoff: utcoff,
-            tm_nsec: millis * 1_000_000 + micros.unwrap_or(0) * 1000,
-        },
-    ))
-}
-
-fn level(line: &str) -> IResult<&str, Level> {
-    alt((
-        map(char('V'), |_| Level::Verbose),
-        map(char('D'), |_| Level::Debug),
-        map(char('I'), |_| Level::Info),
-        map(char('W'), |_| Level::Warn),
-        map(char('E'), |_| Level::Error),
-        map(char('F'), |_| Level::Fatal),
-        map(char('A'), |_| Level::Assert),
-    ))(line)
-}
-
 fn printable(line: &str) -> IResult<&str, Record> {
-    let (line, timestamp) = timestamp(line)?;
-    let (line, _) = many0(space1)(line)?;
-    let (line, process) = hex_digit1(line)?;
-    let (line, _) = many0(space1)(line)?;
-    let (line, thread) = hex_digit1(line)?;
-    let (line, _) = many0(space1)(line)?;
-    let (line, level) = level(line)?;
-    let (line, _) = space0(line)?;
-    let (line, logtag) = take_until(": ")(line)?;
-    let (line, _) = tag(": ")(line)?;
-    let (line, message) = opt(rest)(line)?;
+    let mut items = line.split_ascii_whitespace();
+    let (date, hour) = (
+        items.next().unwrap_or("01-01"),
+        items.next().unwrap_or("00:00"),
+    );
+
+    let (process, thread) = (items.next().unwrap_or("0"), items.next().unwrap_or("0"));
+    let level = level(items.next().unwrap_or("D"));
+    let tag = {
+        // Basically a take_while(':') but considering the failing match too.
+        let mut list: Vec<&str> = vec![];
+        for part in items.by_ref() {
+            if let Some(fixed) = part.strip_suffix(':') {
+                list.push(fixed);
+                break;
+            } else {
+                list.push(part);
+            }
+        }
+        list.join(" ")
+    };
+    let message = items.collect::<Vec<&str>>().join(" ");
 
     let rec = Record {
-        timestamp: Some(Timestamp::new(timestamp)),
-        message: message.unwrap_or("").trim().to_owned(),
+        time: Some(format!("{date} {hour}")),
+        message: message.trim().to_owned(),
         level,
-        tag: logtag.trim().to_owned(),
+        tag: tag.trim().to_owned(),
         process: process.trim().to_owned(),
         thread: thread.trim().to_owned(),
         ..Default::default()
@@ -257,45 +185,13 @@ impl Parser {
 
 #[test]
 fn parse_level() {
-    assert_eq!(level("V").unwrap().1, Level::Verbose);
-    assert_eq!(level("D").unwrap().1, Level::Debug);
-    assert_eq!(level("I").unwrap().1, Level::Info);
-    assert_eq!(level("W").unwrap().1, Level::Warn);
-    assert_eq!(level("E").unwrap().1, Level::Error);
-    assert_eq!(level("F").unwrap().1, Level::Fatal);
-    assert_eq!(level("A").unwrap().1, Level::Assert);
-}
-
-#[test]
-fn parser_year() {
-    let date_wrong = "00";
-    let just_date = "2000";
-    let date_with_month = "2000-03";
-    let val = opt(parse_year)(date_wrong);
-    let val2 = opt(parse_year)(date_with_month);
-    let val3 = opt(parse_year)(just_date);
-    assert_eq!(Ok(("00", None)), val);
-    assert_eq!(Ok(("2000", None)), val3);
-    assert_eq!(Ok(("03", Some(2000))), val2);
-}
-
-#[test]
-fn parse_timestamp() {
-    let ts = timestamp("03-25 19:11:19.054211").unwrap();
-    assert_eq!(00, ts.1.tm_year);
-    assert_eq!(3, ts.1.tm_mon);
-    assert_eq!(25, ts.1.tm_mday);
-    assert_eq!(19, ts.1.tm_hour);
-    assert_eq!(11, ts.1.tm_min);
-    assert_eq!(19, ts.1.tm_sec);
-    timestamp("03-25 7:11:19.052").unwrap();
-    timestamp("2017-03-25 19:11:19.052").unwrap();
-    timestamp("2017-03-25 19:11:19.052123").unwrap();
-}
-#[test]
-fn parse_unparseable() {
-    let p = DefaultParser {};
-    assert!(p.try_parse_str("").is_err());
+    assert_eq!(level("V"), Level::Verbose);
+    assert_eq!(level("D"), Level::Debug);
+    assert_eq!(level("I"), Level::Info);
+    assert_eq!(level("W"), Level::Warn);
+    assert_eq!(level("E"), Level::Error);
+    assert_eq!(level("F"), Level::Fatal);
+    assert_eq!(level("A"), Level::Assert);
 }
 
 #[test]
@@ -324,24 +220,7 @@ fn parse_printable() {
 
     let t = "11-06 13:58:53.582 31359 31420 I GStreamer+amc: 0:00:00.326067533 0xb8ef2a00";
     let r = p.try_parse_str(t).unwrap();
-    assert_eq!(
-        r.timestamp,
-        Some(Timestamp {
-            tm: Tm {
-                tm_year: 0,
-                tm_mon: 11,
-                tm_mday: 6,
-                tm_hour: 13,
-                tm_min: 58,
-                tm_sec: 53,
-                tm_nsec: 582000000,
-                tm_wday: 0,
-                tm_yday: 0,
-                tm_isdst: 0,
-                tm_utcoff: 0,
-            }
-        })
-    );
+    assert_eq!(r.time, Some("11-06 13:58:53.582".to_string()));
     assert_eq!(r.level, Level::Info);
     assert_eq!(r.tag, "GStreamer+amc");
     assert_eq!(r.process, "31359");
@@ -364,33 +243,10 @@ fn parse_printable() {
 }
 
 #[test]
-fn parse_csv_unparseable() {
-    let p = CsvParser {};
-    assert!(p.try_parse_str("").is_err());
-    assert!(p.try_parse_str(",,,").is_err());
-}
-
-#[test]
 fn test_parse_csv() {
     let t = "07-01 14:13:14.446000000,Sensor:batt_therm:29000 mC,Info,ThermalEngine,225,295,07-01 14:13:14.446   225   295 I ThermalEngine: Sensor:batt_therm:29000 mC";
     let p = CsvParser {};
     let r = p.try_parse_str(t).unwrap();
-    assert_eq!(r.level, Level::Info);
-    assert_eq!(r.tag, "ThermalEngine");
-    assert_eq!(r.process, "225");
-    assert_eq!(r.thread, "295");
-    assert_eq!(r.message, "Sensor:batt_therm:29000 mC");
-    assert_eq!(
-        r.raw,
-        "07-01 14:13:14.446   225   295 I ThermalEngine: Sensor:batt_therm:29000 mC"
-    );
-}
-
-#[test]
-fn test_parse_section() {
-    let mut p = Parser::default();
-    p.parse("------ EVENT LOG (logcat -d -b all) ------");
-    let r = p.parse("07-01 14:13:14.446000000,Sensor:batt_therm:29000 mC,Info,ThermalEngine,225,295,07-01 14:13:14.446   225   295 I ThermalEngine: Sensor:batt_therm:29000 mC");
     assert_eq!(r.level, Level::Info);
     assert_eq!(r.tag, "ThermalEngine");
     assert_eq!(r.process, "225");

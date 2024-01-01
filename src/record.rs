@@ -20,17 +20,8 @@
 
 use csv::WriterBuilder;
 use failure::{format_err, Error};
-use serde::{
-    de::{Deserializer, Visitor},
-    ser::Serializer,
-    Deserialize, Serialize,
-};
-use std::{
-    fmt::{Display, Formatter},
-    ops::Deref,
-    str::FromStr,
-};
-use time::{strftime, strptime, Tm};
+use serde::{Deserialize, Serialize};
+use std::{fmt::Display, str::FromStr};
 
 type StdResult<T, E> = std::result::Result<T, E>;
 
@@ -153,75 +144,9 @@ impl Level {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct Timestamp {
-    pub tm: Tm,
-}
-
-impl Deref for Timestamp {
-    type Target = Tm;
-
-    fn deref(&self) -> &Tm {
-        &self.tm
-    }
-}
-
-impl Timestamp {
-    pub fn new(t: Tm) -> Timestamp {
-        Timestamp { tm: t }
-    }
-
-    pub fn now() -> Timestamp {
-        Timestamp { tm: time::now() }
-    }
-}
-
-impl Serialize for Timestamp {
-    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        strftime("%m-%d %H:%M:%S.%f", &self.tm)
-            .map_err(|e| ::serde::ser::Error::custom(e.to_string()))?
-            .serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for Timestamp {
-    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct TimeVisitor;
-
-        impl<'de> Visitor<'de> for TimeVisitor {
-            type Value = Timestamp;
-            fn visit_str<E>(self, str_data: &str) -> StdResult<Timestamp, E>
-            where
-                E: ::serde::de::Error,
-            {
-                strptime(str_data, "%m-%d %H:%M:%S.%f")
-                    .map(Timestamp::new)
-                    .map_err(|_| {
-                        ::serde::de::Error::invalid_value(
-                            ::serde::de::Unexpected::Str(str_data),
-                            &self,
-                        )
-                    })
-            }
-
-            fn expecting(&self, formatter: &mut Formatter) -> ::std::fmt::Result {
-                formatter.write_str("string %m-%d %H:%M:%S.%f")
-            }
-        }
-
-        deserializer.deserialize_str(TimeVisitor)
-    }
-}
-
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct Record {
-    pub timestamp: Option<Timestamp>,
+    pub time: Option<String>,
     pub message: String,
     pub level: Level,
     pub tag: String,
