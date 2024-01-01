@@ -24,14 +24,14 @@ use failure::Fail;
 
 use nom::{
     branch::alt,
-    bytes::complete::{tag, take, take_till1, take_until, take_until1, take_while_m_n},
+    bytes::complete::{tag, take, take_until, take_until1, take_while_m_n},
     character::{
         complete::{char, hex_digit1, i32, space0, space1},
         is_digit,
     },
     combinator::{map, opt, peek, rest},
     error::Error,
-    multi::{many0, many1},
+    multi::many0,
     IResult,
 };
 
@@ -160,54 +160,6 @@ fn printable(line: &str) -> IResult<&str, Record> {
     Ok((line, rec))
 }
 
-fn parse_mindroid_short(line: &str) -> IResult<&str, Record> {
-    let (line, level) = level(line)?;
-    let (line, _) = char('/')(line)?;
-    let (line, logtag) = take_till1(|c| c == '(' || c == ':')(line)?;
-    let (line, _) = opt(tag("("))(line)?;
-    let (line, _) = opt(tag("0x"))(line)?;
-    let (line, process) = opt(hex_digit1)(line)?;
-    let (line, _) = opt(tag(")"))(line)?;
-    let (line, _) = opt(tag(": "))(line)?;
-    let (line, message) = opt(rest)(line)?;
-    let rec = Record {
-        process: process.unwrap_or("").trim().to_owned(),
-        timestamp: None,
-        message: message.unwrap_or("").trim().to_owned(),
-        level,
-        tag: logtag.trim().to_owned(),
-        ..Default::default()
-    };
-    Ok((line, rec))
-}
-
-fn parse_mindroid_long(line: &str) -> IResult<&str, Record> {
-    let (line, timestamp) = timestamp(line)?;
-    let (line, _) = many1(space1)(line)?;
-    let (line, _) = opt(tag("0x"))(line)?;
-    let (line, process) = hex_digit1(line)?;
-    let (line, _) = many1(space1)(line)?;
-    let (line, level) = level(line)?;
-    let (line, _) = space0(line)?;
-    let (line, logtag) = take_until(": ")(line)?;
-    let (line, _) = tag(": ")(line)?;
-    let (line, message) = opt(rest)(line)?;
-    let rec = Record {
-        process: process.trim().to_owned(),
-        timestamp: Some(Timestamp::new(timestamp)),
-        message: message.unwrap_or("").trim().to_owned(),
-        level,
-        tag: logtag.trim().to_owned(),
-        ..Default::default()
-    };
-    Ok((line, rec))
-}
-
-fn parse_mindroid(line: &str) -> IResult<&str, Record> {
-    let mindroid = alt((parse_mindroid_short, parse_mindroid_long))(line)?;
-    Ok(mindroid)
-}
-
 pub fn bugreport_section(line: &str) -> IResult<&str, (String, String)> {
     let (line, logtag) = take_until("(")(line)?;
     let (line, _) = char('(')(line)?;
@@ -217,33 +169,11 @@ pub fn bugreport_section(line: &str) -> IResult<&str, (String, String)> {
     Ok((line, (logtag.to_string(), msg.to_string())))
 }
 
-pub fn property(line: &str) -> IResult<&str, (String, String)> {
-    let (line, _) = char('[')(line)?;
-    let (line, prop) = take_until("]")(line)?;
-    let (line, _) = tag("]: [")(line)?;
-    let (line, val) = take_until("]")(line)?;
-    let (line, _) = char(']')(line)?;
-    Ok((line, (prop.to_string(), val.to_string())))
-}
-
 pub struct DefaultParser;
 
 impl FormatParser for DefaultParser {
     fn try_parse_str(&self, line: &str) -> Result<Record, ParserError> {
         printable(line)
-            .map(|(_, mut v)| {
-                v.raw = line.into();
-                v
-            })
-            .map_err(|e| ParserError(format!("{e}")))
-    }
-}
-
-pub struct MindroidParser;
-
-impl FormatParser for MindroidParser {
-    fn try_parse_str(&self, line: &str) -> Result<Record, ParserError> {
-        parse_mindroid(line)
             .map(|(_, mut v)| {
                 v.raw = line.into();
                 v
@@ -284,7 +214,6 @@ impl Default for Parser {
         Parser {
             parsers: vec![
                 Box::new(DefaultParser),
-                Box::new(MindroidParser),
                 Box::new(CsvParser),
                 Box::new(JsonParser),
             ],
@@ -336,6 +265,7 @@ fn parse_level() {
     assert_eq!(level("F").unwrap().1, Level::Fatal);
     assert_eq!(level("A").unwrap().1, Level::Assert);
 }
+
 #[test]
 fn parser_year() {
     let date_wrong = "00";
@@ -434,54 +364,6 @@ fn parse_printable() {
 }
 
 #[test]
-fn test_parse_mindroid() {
-    let t = "I/Runtime: Mindroid runtime system node id: 1";
-    let p = MindroidParser {};
-    let r = p.try_parse_str(t).unwrap();
-    assert_eq!(r.level, Level::Info);
-    assert_eq!(r.tag, "Runtime");
-    assert_eq!(r.process, "");
-    assert_eq!(r.thread, "");
-    assert_eq!(r.message, "Mindroid runtime system node id: 1");
-
-    let t = "D/ServiceManager(000000000000000C): foo bar";
-    let r = p.try_parse_str(t).unwrap();
-    assert_eq!(r.level, Level::Debug);
-    assert_eq!(r.tag, "ServiceManager");
-    assert_eq!(r.process, "000000000000000C");
-    assert_eq!(r.thread, "");
-    assert_eq!(r.message, "foo bar");
-
-    let t = "D/ServiceManager(0x123): Service MediaPlayer has been created in process main";
-    let r = p.try_parse_str(t).unwrap();
-    assert_eq!(r.level, Level::Debug);
-    assert_eq!(r.tag, "ServiceManager");
-    assert_eq!(r.process, "123");
-    assert_eq!(r.thread, "");
-    assert_eq!(
-        r.message,
-        "Service MediaPlayer has been created in process main"
-    );
-
-    let t = "D/ServiceManager(0xabc): Service MediaPlayer has been created in process main";
-    let r = p.try_parse_str(t).unwrap();
-    assert_eq!(r.process, "abc");
-
-    let t = "2017-03-25 19:11:19.052  0x3b7fe700  D SomeThing: Parsing IPV6 address \
-             fd53:7cb8:383:4:0:0:0:68";
-    let r = p.try_parse_str(t).unwrap();
-    assert_eq!(r.level, Level::Debug);
-    assert_eq!(r.tag, "SomeThing");
-    assert_eq!(r.process, "3b7fe700");
-    assert_eq!(r.thread, "");
-    assert_eq!(r.message, "Parsing IPV6 address fd53:7cb8:383:4:0:0:0:68");
-
-    let t = "2017-03-25 19:11:19.052  0x3b7fe700  D SomeThing: ";
-    let r = p.try_parse_str(t).unwrap();
-    assert_eq!(r.message, "");
-}
-
-#[test]
 fn parse_csv_unparseable() {
     let p = CsvParser {};
     assert!(p.try_parse_str("").is_err());
@@ -501,15 +383,6 @@ fn test_parse_csv() {
     assert_eq!(
         r.raw,
         "07-01 14:13:14.446   225   295 I ThermalEngine: Sensor:batt_therm:29000 mC"
-    );
-}
-
-#[test]
-fn parse_property() {
-    let t = "[ro.build.tags]: [release-keys]";
-    assert_eq!(
-        property(t).unwrap().1,
-        ("ro.build.tags".to_owned(), "release-keys".to_owned())
     );
 }
 
