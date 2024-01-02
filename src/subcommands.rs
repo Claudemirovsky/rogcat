@@ -38,7 +38,7 @@ use std::{
     path::{Path, PathBuf},
     process::{exit, Command, Stdio},
 };
-use time::{now, strftime};
+use time::{format_description, OffsetDateTime};
 use tokio::{io::lines, runtime::Runtime};
 use tokio_process::CommandExt;
 use zip::{write::FileOptions, CompressionMethod, ZipWriter};
@@ -116,8 +116,10 @@ fn report_filename() -> Result<String, Error> {
     #[cfg(windows)]
     let sep = "_";
 
-    let format = format!("%m-%d_%H{sep}%M{sep}%S");
-    Ok(format!("{}-bugreport.txt", strftime(&format, &now())?))
+    let format = format!("[month]-[day]_[hour]{sep}[minute]{sep}[second]-bugreport.txt");
+    let desc = format_description::parse_borrowed::<2>(format.as_str())?;
+    let now = OffsetDateTime::now_local()?;
+    now.format(&desc).map_err(|x| x.into())
 }
 
 /// Performs a dumpstate and write to fs. Note: The Android 7+ dumpstate is not supported.

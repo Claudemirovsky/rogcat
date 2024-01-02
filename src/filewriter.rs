@@ -31,7 +31,7 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
 };
-use time::{now, strftime};
+use time::{macros::format_description, OffsetDateTime};
 
 /// Filename format
 #[derive(Clone)]
@@ -253,7 +253,10 @@ impl<'a, T: Writer> FileWriter<T> {
                         })?;
                     }
 
-                    let now = strftime("%F-%H_%M_%S", &now())?;
+                    let now = OffsetDateTime::now_local()?;
+                    let format =
+                        format_description!("[year]-[month]-[day]-[hour]_[minute]_[second]");
+                    let time = now.format(format)?;
                     let enumeration = e
                         .map(|a| format!("-{a:03}"))
                         .unwrap_or_else(|| "".to_owned());
@@ -263,7 +266,7 @@ impl<'a, T: Writer> FileWriter<T> {
                         .ok_or_else(|| err_msg("Invalid path"))?
                         .to_str()
                         .ok_or_else(|| err_msg("Invalid path"))?;
-                    let candidate = PathBuf::from(format!("{now}{enumeration}_{filename}"));
+                    let candidate = PathBuf::from(format!("{time}{enumeration}_{filename}"));
                     let candidate = dir.join(candidate);
                     if !overwrite && candidate.exists() {
                         e = Some(e.unwrap_or(0) + 1);

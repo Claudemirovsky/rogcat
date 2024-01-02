@@ -36,6 +36,7 @@ use std::{
     path::PathBuf,
     process::{Command, Stdio},
 };
+use time::{macros::format_description, OffsetDateTime};
 use tokio::{
     codec::{Decoder, FramedRead},
     fs::File,
@@ -90,7 +91,8 @@ pub fn serial(_args: &ArgMatches) -> LogStream {
 #[cfg(target_os = "linux")]
 pub fn can(dev: &str) -> Result<LogStream, Error> {
     let process = dev.to_string();
-    let now = time::now();
+    let now = OffsetDateTime::now_local()?;
+    let format = format_description!("[unix_timestamp].[subsecond]");
     let stream = tokio_socketcan::CANSocket::open(dev)?
         .map_err(std::convert::Into::into)
         .map(move |s| {
@@ -100,7 +102,7 @@ pub fn can(dev: &str) -> Result<LogStream, Error> {
                 .map(|b| format!("{:02x}", b))
                 .collect::<Vec<String>>();
             let extended = if s.is_extended() { "E" } else { " " };
-            let time = time::strftime("%s.%f", &now).ok();
+            let time = now.format(format).ok();
 
             StreamData::Record(Record {
                 time: time.to_owned(),

@@ -46,7 +46,7 @@ regex = "1.1.6"
 serde = { version = "1.0.91", features = ['derive'] }
 serde_json = "1.0.39"
 term_size = "0.3.1"
-time = "0.1.42"
+time = { version = "0.3.31", features = ["macros", "local-offset", "formatting"] }
 tokio = "0.1.20"
 tokio-process = "0.2.3"
 tokio-serial = "3.2.0"
