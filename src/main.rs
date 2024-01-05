@@ -19,11 +19,9 @@
 // SOFTWARE.
 
 use failure::Error;
-use futures::{sync::oneshot, Future, Sink, Stream};
+use futures::{future::ready, Sink, Stream, StreamExt};
 use rogcat::{parser, record::Record};
 use std::{process::exit, str::FromStr};
-use tokio::runtime::Runtime;
-use tokio_signal::ctrl_c;
 use url::Url;
 
 mod cli;
@@ -44,17 +42,17 @@ pub enum StreamData {
     Line(String),
 }
 
-type LogStream = Box<dyn Stream<Item = StreamData, Error = Error> + Send>;
-type LogSink = Box<dyn Sink<SinkItem = Record, SinkError = Error> + Send>;
+type LogStream = Box<dyn Stream<Item = StreamData> + Send>;
+type LogSink = Box<dyn Sink<Record, Error = Error> + Send>;
 
-fn run() -> Result<(), Error> {
+async fn run() -> Result<(), Error> {
     let args = cli::cli().get_matches();
     utils::config_init();
-    subcommands::run(&args);
+    subcommands::run(&args).await;
 
     let source = {
         if args.is_present("input") {
-            reader::files(&args)?
+            reader::files(&args).await?
         } else {
             match args.value_of("COMMAND") {
                 Some(c) => {
@@ -64,7 +62,7 @@ fn run() -> Result<(), Error> {
                         match url.scheme() {
                             #[cfg(target_os = "linux")]
                             "can" => reader::can(url.host_str().expect("Invalid can device"))?,
-                            "tcp" => reader::tcp(&url)?,
+                            "tcp" => reader::tcp(&url).await?,
                             "serial" => reader::serial(&args),
                             _ => reader::process(&args)?,
                         }
@@ -78,30 +76,29 @@ fn run() -> Result<(), Error> {
     };
 
     let mut profile = profiles::from_args(&args)?;
-    let sink = if args.is_present("output") {
+    let sink = Box::into_pin(if args.is_present("output") {
         filewriter::try_from(&args)?
     } else {
         terminal::try_from(&args, &profile)?
-    };
+    });
 
     // Stop process after n records if argument head is passed
     let mut head = args
         .value_of("head")
         .map(|v| usize::from_str(v).expect("Invalid head arguement"));
 
-    let mut filter = filter::from_args_profile(&args, &mut profile)?;
+    let mut filter = filter::from_args_profile(&args, &mut profile).await?;
+    println!("Filter -> {:?}", filter);
     let mut parser = parser::Parser::default();
 
-    let mut runtime = Runtime::new()?;
-
-    let f = source
+    let future = Box::into_pin(source)
         .map(move |a| match a {
-            StreamData::Line(l) => parser.parse(&l),
-            StreamData::Record(r) => r,
+            StreamData::Line(line) => parser.parse(&line),
+            StreamData::Record(rec) => rec,
         })
-        .filter(move |r| filter.filter(r))
+        .filter(move |r| ready(filter.filter(r)))
         .take_while(move |_| {
-            Ok(match head {
+            ready(match head {
                 Some(0) => false,
                 Some(n) => {
                     head = Some(n - 1);
@@ -110,22 +107,19 @@ fn run() -> Result<(), Error> {
                 None => true,
             })
         })
-        .forward(sink)
-        .map(|_| exit(0))
-        .map_err(|e| eprintln!("{e}"));
-    let mut f = Some(oneshot::spawn(f, &runtime.executor()));
+        .map(Ok)
+        .forward(sink);
 
-    // Cancel stream processing on ctrl-c
-    runtime.block_on(ctrl_c().flatten_stream().take(1).for_each(move |()| {
-        f.take();
-        Ok(())
-    }))?;
-
+    tokio::spawn(async move {
+        future.await.unwrap();
+    });
+    tokio::signal::ctrl_c().await.unwrap();
     Ok(())
 }
 
-fn main() {
-    match run() {
+#[tokio::main]
+async fn main() {
+    match run().await {
         Err(e) => {
             eprintln!("{e}");
             exit(1)

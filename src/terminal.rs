@@ -25,13 +25,17 @@ use crate::{
 };
 use clap::{values_t, ArgMatches};
 use failure::{err_msg, format_err, Error};
-use futures::{Async, AsyncSink, Poll, Sink, StartSend};
+use futures::{
+    sink::{Sink, SinkExt},
+    task::{Context, Poll},
+};
 use regex::Regex;
 use rogcat::record::{Format, Level, Record};
 use std::{
     cmp::{max, min},
     convert::Into,
     io::{stdout, BufWriter, Write},
+    pin::Pin,
     str::FromStr,
 };
 use termcolor::{Buffer, BufferWriter, Color, ColorChoice, ColorSpec, WriteColor};
@@ -50,10 +54,10 @@ pub fn try_from(args: &ArgMatches<'_>, profile: &Profile) -> Result<LogSink, Err
         return Err(format_err!("HTML format is only valid for file output"));
     }
 
-    let sink = match format {
+    let sink = Box::into_pin(match format {
         Format::Human => Box::new(Human::from(args, profile, format)) as LogSink,
         format => Box::new(FormatSink::new(format, stdout())) as LogSink,
-    };
+    });
 
     Ok(Box::new(sink.sink_map_err(|e| {
         failure::format_err!("Terminal error: {}", e)
@@ -337,31 +341,46 @@ impl<T: Write> FormatSink<T> {
     }
 }
 
-impl<T: Write> Sink for FormatSink<T> {
-    type SinkItem = Record;
-    type SinkError = Error;
+impl<T: Write + std::marker::Unpin> Sink<Record> for FormatSink<T> {
+    type Error = Error;
 
-    fn start_send(&mut self, record: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
-        self.sink
-            .write_all(self.format.fmt_record(&record)?.as_bytes())?;
-        self.sink.write_all(&[b'\n'])?;
-        Ok(AsyncSink::Ready)
+    fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
     }
 
-    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
-        Ok(Async::Ready(()))
+    fn start_send(mut self: Pin<&mut Self>, item: Record) -> Result<(), Self::Error> {
+        let this = self.get_mut();
+        this.sink
+            .write_all(this.format.fmt_record(&item)?.as_bytes())?;
+        this.sink.write_all(&[b'\n'])?;
+        Ok(())
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
     }
 }
 
-impl Sink for Human {
-    type SinkItem = Record;
-    type SinkError = Error;
+impl Sink<Record> for Human {
+    type Error = Error;
 
-    fn start_send(&mut self, record: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
-        self.print(&record).map(|_| AsyncSink::Ready)
+    fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
     }
 
-    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
-        Ok(Async::Ready(()))
+    fn start_send(mut self: Pin<&mut Self>, item: Record) -> Result<(), Self::Error> {
+        self.print(&item)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
     }
 }

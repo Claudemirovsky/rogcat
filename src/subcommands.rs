@@ -27,34 +27,42 @@ use crate::{
 use clap::{crate_name, value_t, ArgMatches};
 use failure::{err_msg, Error};
 use futures::{
-    future::ok, stream::Stream, sync::oneshot, Async, AsyncSink, Future, Poll, Sink, StartSend,
+    future::ready,
+    sink::Sink,
+    stream::StreamExt,
+    task::{Context, Poll},
+    TryStreamExt,
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use rogcat::record::Level;
 use std::{
     borrow::ToOwned,
     fs::{DirBuilder, File},
-    io::{BufReader, Write},
+    io::Write,
     path::{Path, PathBuf},
-    process::{exit, Command, Stdio},
+    pin::Pin,
+    process::{exit, Stdio},
 };
 use time::{format_description, OffsetDateTime};
-use tokio::{io::lines, runtime::Runtime};
-use tokio_process::CommandExt;
+use tokio::{
+    io::{AsyncBufReadExt, BufReader},
+    process::Command,
+};
+use tokio_stream::wrappers::LinesStream;
 use zip::{write::FileOptions, CompressionMethod, ZipWriter};
 
-pub fn run(args: &ArgMatches) {
+pub async fn run(args: &ArgMatches<'_>) {
     match args.subcommand() {
-        ("bugreport", Some(sub_matches)) => bugreport(sub_matches),
-        ("clear", Some(sub_matches)) => clear(sub_matches),
-        ("completions", Some(sub_matches)) => completions(sub_matches),
-        ("devices", _) => devices(),
-        ("log", Some(sub_matches)) => log(sub_matches),
+        ("bugreport", Some(sub_matches)) => bugreport(sub_matches).await,
+        ("clear", Some(sub_matches)) => clear(sub_matches).await,
+        ("completions", Some(sub_matches)) => completions(sub_matches).await,
+        ("devices", _) => devices().await,
+        ("log", Some(sub_matches)) => log(sub_matches).await.unwrap(),
         (_, _) => (),
     }
 }
 
-pub fn completions(args: &ArgMatches) {
+pub async fn completions(args: &ArgMatches<'_>) {
     if let Err(e) = args
         .value_of("shell")
         .ok_or_else(|| err_msg("Required shell argument is missing"))
@@ -123,7 +131,7 @@ fn report_filename() -> Result<String, Error> {
 }
 
 /// Performs a dumpstate and write to fs. Note: The Android 7+ dumpstate is not supported.
-pub fn bugreport(args: &ArgMatches) {
+pub async fn bugreport(args: &ArgMatches<'_>) {
     let filename = value_t!(args.value_of("file"), String)
         .unwrap_or_else(|_| report_filename().expect("Failed to generate filename"));
     let filename_path = PathBuf::from(&filename);
@@ -139,13 +147,13 @@ pub fn bugreport(args: &ArgMatches) {
         adb.push(device);
     }
 
-    let mut child = Command::new(adb)
+    let child = Command::new(adb)
         .arg("bugreport")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn_async()
+        .spawn()
         .expect("Failed to launch adb");
-    let stdout = BufReader::new(child.stdout().take().unwrap());
+    let stdout = BufReader::new(child.stdout.unwrap());
 
     let dir = filename_path.parent().unwrap_or_else(|| Path::new(""));
     if !dir.is_dir() {
@@ -172,54 +180,52 @@ pub fn bugreport(args: &ArgMatches) {
     progress.set_message("Pulling bugreport line");
 
     // TODO: Migrate to tokio::fs::File
-    let output = tokio::io::lines(stdout)
-        .for_each(|l| {
-            write.write_all(l.as_bytes()).expect("Failed to write");
-            write.write_all(b"\n").expect("Failed to write");
-            progress.inc(1);
-            ok(())
-        })
-        .then(|r| {
+    let output = LinesStream::new(stdout.lines()).try_for_each(|line| {
+        write.write_all(line.as_bytes()).expect("Failed to write");
+        write.write_all(b"\n").expect("Failed to write");
+        progress.inc(1);
+        ready(Ok(()))
+    });
+
+    match output.await {
+        Ok(_) => {
             progress.set_style(ProgressStyle::default_bar().template("{msg:.dim.bold}"));
             progress.finish_with_message(&format!("Finished {}.", filename_path.display()));
-            r
-        })
-        .map_err(|e| {
+        }
+        Err(e) => {
             eprintln!("Failed to create bugreport: {e}");
             exit(1);
-        });
-
-    tokio::runtime::current_thread::block_on_all(output).expect("Runtime error");
-    exit(0);
+        }
+    }
 }
 
-pub fn devices() {
-    let mut child = Command::new(adb().expect("Failed to find adb"))
+pub async fn devices() {
+    let child = Command::new(adb().expect("Failed to find adb"))
         .arg("devices")
         .stdout(Stdio::piped())
-        .spawn_async()
+        .spawn()
         .expect("Failed to run adb devices");
-    let reader = BufReader::new(child.stdout().take().unwrap());
-    let result = lines(reader)
+
+    let lines = BufReader::new(child.stdout.unwrap()).lines();
+    let result = LinesStream::new(lines)
         .skip(1)
-        .filter(|l| !l.is_empty())
-        .filter(|l| !l.starts_with("* daemon"))
-        .for_each(|l| {
-            let mut s = l.split_whitespace();
-            let id: &str = s.next().unwrap_or("unknown");
-            let name: &str = s.next().unwrap_or("unknown");
+        .filter_map(|x| async move {
+            match x {
+                Ok(line) if line.is_empty() => None,
+                Ok(line) if line.starts_with("* daemon") => None,
+                Ok(line) => Some(line),
+                _ => None,
+            }
+        })
+        .for_each(|line| {
+            let mut split = line.split_whitespace();
+            let id = split.next().unwrap_or("unknown");
+            let name = split.next().unwrap_or("unknown");
             println!("{id} {name}");
-            Ok(())
+            ready(())
         });
 
-    tokio::run(
-        result
-            .map_err(|e| {
-                eprintln!("Failed to run adb devices: {e}");
-                exit(1)
-            })
-            .map(|_| exit(0)),
-    );
+    result.await;
 }
 
 struct Logger {
@@ -239,11 +245,14 @@ impl Logger {
     }
 }
 
-impl Sink for Logger {
-    type SinkItem = String;
-    type SinkError = Error;
+impl Sink<String> for Logger {
+    type Error = Error;
 
-    fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
+    fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn start_send(self: Pin<&mut Self>, item: String) -> Result<(), Self::Error> {
         let child = Command::new(adb()?)
             .arg("shell")
             .arg("log")
@@ -253,38 +262,41 @@ impl Sink for Logger {
             .arg(format!("\"{}\"", &self.tag))
             .arg(&item)
             .stdout(Stdio::piped())
-            .output_async()
-            .map(|_| ())
-            .map_err(|_| ());
+            .output();
         tokio::spawn(child);
-        Ok(AsyncSink::Ready)
+        Ok(())
     }
 
-    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
-        Ok(Async::Ready(()))
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
     }
 }
 
 /// Call something like adb shell log <message>
-pub fn log(args: &ArgMatches) {
+pub async fn log(args: &ArgMatches<'_>) -> Result<(), Error> {
     let message = args.value_of("MESSAGE").unwrap_or("");
     let tag = args.value_of("tag").unwrap_or("Rogcat").to_owned();
     let level = Level::from(args.value_of("level").unwrap_or(""));
     match message {
         "-" => {
             let sink = Logger { tag, level };
-            let stream = stdin()
+            let stdin = Box::into_pin(stdin());
+            stdin
                 .map(|d| match d {
                     StreamData::Line(l) => l,
                     _ => panic!("Received non line item during log"),
                 })
+                .map(Ok)
                 .forward(sink)
-                .map(|_| ())
-                .map_err(|_| ());
-            tokio::run(stream);
+                .await
+                .unwrap();
         }
         _ => {
-            let child = Command::new(adb().expect("Failed to find adb"))
+            Command::new(adb().expect("Failed to find adb"))
                 .arg("shell")
                 .arg("log")
                 .arg("-p")
@@ -293,10 +305,8 @@ pub fn log(args: &ArgMatches) {
                 .arg(&tag)
                 .arg(format!("\"{message}\""))
                 .stdout(Stdio::piped())
-                .output_async()
-                .map(|_| ())
-                .map_err(|_| ());
-            tokio::run(child)
+                .output()
+                .await?;
         }
     }
 
@@ -304,22 +314,28 @@ pub fn log(args: &ArgMatches) {
 }
 
 /// Call adb logcat -c -b BUFFERS
-pub fn clear(args: &ArgMatches) {
+pub async fn clear(args: &ArgMatches<'_>) {
     let buffer = args
         .values_of("buffer")
         .map(|m| m.map(ToOwned::to_owned).collect::<Vec<String>>())
         .or_else(|| utils::config_get("buffer"))
         .unwrap_or_else(|| DEFAULT_BUFFER.iter().map(|&s| s.to_owned()).collect())
         .join(" -b ");
-    let child = Command::new(adb().expect("Failed to find adb"))
+
+    let mut child = Command::new(adb().expect("Failed to find adb"))
         .arg("logcat")
         .arg("-c")
         .arg("-b")
         .args(buffer.split(' '))
-        .spawn_async()
+        .spawn()
         .expect("Failed to run adb");
 
-    let runtime = Runtime::new().expect("Failed to start runtime");
-    let h = oneshot::spawn(child, &runtime.executor());
-    exit(h.wait().expect("Failed to run").code().unwrap_or(1));
+    exit(
+        child
+            .wait()
+            .await
+            .expect("Failed to run")
+            .code()
+            .unwrap_or(1),
+    );
 }

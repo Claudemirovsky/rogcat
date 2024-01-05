@@ -21,7 +21,10 @@
 use crate::LogSink;
 use clap::ArgMatches;
 use failure::{err_msg, format_err, Error};
-use futures::{Async, AsyncSink, Poll, Sink, StartSend};
+use futures::{
+    sink::Sink,
+    task::{Context, Poll},
+};
 use indicatif::{ProgressBar, ProgressStyle};
 use regex::Regex;
 use rogcat::record::{Format, Record};
@@ -29,6 +32,7 @@ use std::{
     fs::{DirBuilder, File},
     io::Write,
     path::{Path, PathBuf},
+    pin::Pin,
     str::FromStr,
 };
 use time::{macros::format_description, OffsetDateTime};
@@ -325,16 +329,23 @@ impl<'a, T: Writer> FileWriter<T> {
     }
 }
 
-impl<T: Writer> Sink for FileWriter<T> {
-    type SinkItem = Record;
-    type SinkError = Error;
+impl<T: Writer> Sink<Record> for FileWriter<T> {
+    type Error = Error;
 
-    fn start_send(&mut self, record: Record) -> StartSend<Record, Error> {
-        self.write(&record).map(|_| AsyncSink::Ready)
+    fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
     }
 
-    fn poll_complete(&mut self) -> Poll<(), Error> {
-        Ok(Async::Ready(()))
+    fn start_send(mut self: Pin<&mut Self>, item: Record) -> Result<(), Self::Error> {
+        self.write(&item)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
     }
 }
 

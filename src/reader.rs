@@ -25,24 +25,25 @@ use crate::{
 };
 use clap::{value_t, ArgMatches};
 use failure::{err_msg, format_err, Error};
-use futures::{stream::iter_ok, Async, Future, Stream};
+use futures::{
+    stream::{iter, select},
+    task::{Context, Poll},
+    Stream, StreamExt, TryStreamExt,
+};
 #[cfg(target_os = "linux")]
 use rogcat::record::Record;
 use std::{
-    borrow::ToOwned,
-    convert::Into,
-    io::BufReader,
-    net::ToSocketAddrs,
-    path::PathBuf,
-    process::{Command, Stdio},
+    borrow::ToOwned, convert::Into, net::ToSocketAddrs, path::PathBuf, pin::Pin, process::Stdio,
 };
 use time::{macros::format_description, OffsetDateTime};
 use tokio::{
-    codec::{Decoder, FramedRead},
     fs::File,
+    io::{AsyncBufReadExt, BufReader},
     net::TcpStream,
+    process::{Child, Command},
 };
-use tokio_process::{Child, CommandExt};
+use tokio_stream::wrappers::LinesStream;
+use tokio_util::codec::{Decoder, FramedRead};
 use url::Url;
 
 /// A spawned child process that implements LogStream
@@ -51,25 +52,29 @@ struct Process {
     /// Respawn cmd upone termination
     respawn: bool,
     child: Option<Child>,
-    stream: Option<LogStream>,
+    stream: Option<Pin<LogStream>>,
 }
 
 /// Open a file and provide a stream of lines
-pub fn files(args: &ArgMatches) -> Result<LogStream, Error> {
+pub async fn files(args: &ArgMatches<'_>) -> Result<LogStream, Error> {
     let files = args
         .values_of("input")
         .ok_or_else(|| err_msg("Missing input argument"))?
         .map(PathBuf::from)
         .collect::<Vec<PathBuf>>();
 
-    let f = iter_ok::<_, Error>(files)
-        .map(|f| {
-            File::open(f.clone())
-                .map(|s| Decoder::framed(LossyLinesCodec::new(), s))
-                .flatten_stream()
-                .map(StreamData::Line)
+    let f = iter::<_>(files)
+        .map(|f| async move {
+            let file = File::open(f.clone())
+                .await
                 .map_err(move |e| format_err!("Failed to open {}: {}", f.display(), e))
+                .unwrap();
+            Decoder::framed(LossyLinesCodec::new(), file)
+                .map_ok(StreamData::Line)
+                .map_err(move |e| format_err!("Failed to read file: {}", e))
+                .filter_map(|x| async move { x.ok() })
         })
+        .filter_map(|x| async move { Some(x.await) })
         .flatten();
 
     Ok(Box::new(f))
@@ -78,8 +83,8 @@ pub fn files(args: &ArgMatches) -> Result<LogStream, Error> {
 /// Open stdin and provide a stream of lines
 pub fn stdin() -> LogStream {
     let s = FramedRead::new(tokio::io::stdin(), LossyLinesCodec::new())
-        .map_err(Into::into)
-        .map(StreamData::Line);
+        .map_ok(StreamData::Line)
+        .filter_map(|x| async move { x.ok() });
     Box::new(s)
 }
 
@@ -94,8 +99,7 @@ pub fn can(dev: &str) -> Result<LogStream, Error> {
     let now = OffsetDateTime::now_local()?;
     let format = format_description!("[unix_timestamp].[subsecond]");
     let stream = tokio_socketcan::CANSocket::open(dev)?
-        .map_err(std::convert::Into::into)
-        .map(move |s| {
+        .map_ok(move |s| {
             let data = s
                 .data()
                 .iter()
@@ -122,42 +126,52 @@ pub fn can(dev: &str) -> Result<LogStream, Error> {
                 process: process.clone(),
                 ..Default::default()
             })
-        });
+        })
+        .filter_map(|r| async move { r.ok() });
     Ok(Box::new(stream))
 }
 
 /// Connect to tcp socket and profile a stream of lines
-pub fn tcp(addr: &Url) -> Result<LogStream, Error> {
+pub async fn tcp(addr: &Url) -> Result<LogStream, Error> {
     let addr = addr
         .to_socket_addrs()?
         .next()
         .ok_or_else(|| err_msg("Failed to parse addr"))?;
-    let s = TcpStream::connect(&addr)
-        .map(|s| Decoder::framed(LossyLinesCodec::new(), s))
-        .flatten_stream()
+    let tcp = TcpStream::connect(&addr)
+        .await
         .map_err(|e| format_err!("Failed to connect: {}", e))
-        .map(StreamData::Line);
+        .unwrap();
 
-    Ok(Box::new(s))
+    let stream = Decoder::framed(LossyLinesCodec::new(), tcp)
+        .map_ok(StreamData::Line)
+        .filter_map(|x| async move { x.ok() });
+
+    Ok(Box::new(stream))
 }
 
-pub fn get_processes_pids(processes: &[String]) -> Vec<String> {
-    let mut command = Command::new(adb().expect("Failed to find adb"))
+pub async fn get_processes_pids(processes: &[String]) -> Vec<String> {
+    let command = Command::new(adb().expect("Failed to find adb"))
         .arg("shell")
         .arg("ps")
         .arg("-Ao")
         .arg("pid,args")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn_async()
+        .spawn()
         .expect("Failed to launch adb");
-    let stdout = BufReader::new(command.stdout().take().unwrap());
+    let stdout = BufReader::new(command.stdout.unwrap());
     let mut items: Vec<String> = vec![];
-    let future = tokio::io::lines(stdout)
+    let future = LinesStream::new(stdout.lines())
         .skip(1)
-        .filter(|l| !l.is_empty())
-        .filter(|l| !l.starts_with("* daemon"))
-        .filter_map(move |line| {
+        .filter_map(|x| async move {
+            match x {
+                Ok(line) if line.is_empty() => None,
+                Ok(line) if line.starts_with("* daemon") => None,
+                Ok(line) => Some(line),
+                _ => None,
+            }
+        })
+        .filter_map(|line| async move {
             let mut split = line.split_whitespace();
             let pid: &str = split.next().unwrap_or("unknown");
             let name: &str = split.next().unwrap_or("unknown");
@@ -169,10 +183,10 @@ pub fn get_processes_pids(processes: &[String]) -> Vec<String> {
         })
         .for_each(|pid| {
             items.push(pid);
-            Ok(())
+            futures::future::ready(())
         });
 
-    tokio::runtime::current_thread::block_on_all(future).expect("Runtime error");
+    future.await;
     items
 }
 
@@ -215,6 +229,7 @@ pub fn logcat(args: &ArgMatches) -> Result<LogStream, Error> {
         cmd.push("-b".into());
         cmd.push(buffer);
     }
+    println!("In logcat, before return");
 
     Ok(Box::new(Process::with_cmd(cmd, respawn)))
 }
@@ -239,43 +254,42 @@ impl Process {
         }
     }
 
-    fn spawn(&mut self) -> Result<Async<Option<StreamData>>, Error> {
+    fn spawn(&mut self, ctx: &mut Context<'_>) -> Poll<Option<StreamData>> {
         let mut child = Command::new(self.cmd[0].clone())
             .args(&self.cmd[1..])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .spawn_async()?;
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
 
-        let stdout = BufReader::new(child.stdout().take().unwrap());
-        let stderr = BufReader::new(child.stderr().take().unwrap());
+        let stdout = BufReader::new(child.stdout.take().unwrap());
+        let stderr = BufReader::new(child.stderr.take().unwrap());
         self.child = Some(child);
 
-        let stdout = lossy_lines(stdout)
-            .map_err(Into::into)
-            .map(StreamData::Line);
-        let stderr = lossy_lines(stderr)
-            .map_err(Into::into)
-            .map(StreamData::Line);
+        let stdout = lossy_lines(stdout).map(StreamData::Line);
+        let stderr = lossy_lines(stderr).map(StreamData::Line);
 
-        let mut stream = stdout.select(stderr);
-        let poll = stream.poll();
-        self.stream = Some(Box::new(stream));
+        let mut stream = select(stdout, stderr);
+        let poll = stream.poll_next_unpin(ctx);
+        self.stream = Some(Box::pin(stream));
         poll
     }
 }
 
 impl Stream for Process {
     type Item = StreamData;
-    type Error = Error;
 
-    fn poll(&mut self) -> Result<Async<Option<Self::Item>>, Self::Error> {
+    fn poll_next(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Option<StreamData>> {
+        // TODO: Fix this thing calling running the ELSE branch as if
+        // it knew no tomorrows, when adb isn't connected to any device.
         if let Some(ref mut inner) = self.stream {
-            match inner.poll() {
-                Ok(Async::Ready(None)) if self.respawn => self.spawn(),
+            match inner.poll_next_unpin(ctx) {
+                Poll::Ready(Some(_)) if self.respawn => self.spawn(ctx),
                 poll => poll,
             }
         } else {
-            self.spawn()
+            self.spawn(ctx)
         }
     }
 }

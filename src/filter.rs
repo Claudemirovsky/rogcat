@@ -37,19 +37,22 @@ pub struct Filter {
     regex: FilterGroup,
 }
 
-fn get_all_pids(args: &ArgMatches<'_>, profile: &mut Profile) {
+async fn get_all_pids(args: &ArgMatches<'_>, profile: &mut Profile) {
     if let Some(processes) = args.values_of("process_name") {
         processes.for_each(|proc| profile.process_name.push(proc.to_string()));
     }
     if !profile.process_name.is_empty() {
         profile
             .pid
-            .extend(get_processes_pids(&profile.process_name));
+            .extend(get_processes_pids(&profile.process_name).await);
     }
 }
 
-pub fn from_args_profile(args: &ArgMatches<'_>, profile: &mut Profile) -> Result<Filter, Error> {
-    get_all_pids(args, profile);
+pub async fn from_args_profile(
+    args: &ArgMatches<'_>,
+    profile: &mut Profile,
+) -> Result<Filter, Error> {
+    get_all_pids(args, profile).await;
     let pid = profile.pid.iter().map(String::as_str);
     let process_name = profile.process_name.iter().map(String::as_str);
     let tag = profile.tag.iter().map(String::as_str);
