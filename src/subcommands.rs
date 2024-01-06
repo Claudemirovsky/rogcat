@@ -191,6 +191,7 @@ pub async fn bugreport(args: &ArgMatches<'_>) {
         Ok(_) => {
             progress.set_style(ProgressStyle::default_bar().template("{msg:.dim.bold}"));
             progress.finish_with_message(&format!("Finished {}.", filename_path.display()));
+            exit(0);
         }
         Err(e) => {
             eprintln!("Failed to create bugreport: {e}");
@@ -226,6 +227,7 @@ pub async fn devices() {
         });
 
     result.await;
+    exit(0);
 }
 
 struct Logger {
@@ -292,8 +294,7 @@ pub async fn log(args: &ArgMatches<'_>) -> Result<(), Error> {
                 })
                 .map(Ok)
                 .forward(sink)
-                .await
-                .unwrap();
+                .await?;
         }
         _ => {
             Command::new(adb().expect("Failed to find adb"))
