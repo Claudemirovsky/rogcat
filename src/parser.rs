@@ -39,27 +39,39 @@ pub trait FormatParser: Send + Sync {
 }
 
 #[inline]
-fn level(level: &str) -> Level {
+fn level(level: &str) -> Result<Level, ParserError> {
     match level {
-        "V" => Level::Verbose,
-        "D" => Level::Debug,
-        "I" => Level::Info,
-        "W" => Level::Warn,
-        "E" => Level::Error,
-        "F" => Level::Fatal,
-        "A" => Level::Assert,
-        _ => Level::Verbose,
+        "V" => Ok(Level::Verbose),
+        "D" => Ok(Level::Debug),
+        "I" => Ok(Level::Info),
+        "W" => Ok(Level::Warn),
+        "E" => Ok(Level::Error),
+        "F" => Ok(Level::Fatal),
+        "A" => Ok(Level::Assert),
+        _ => Err(ParserError(format!("Invalid level: {}", level))),
     }
 }
-fn printable(line: &str) -> IResult<&str, Record> {
+
+// date, hour, pid, thread, level, tag
+const MIN_PARTS_COUNT: usize = 6;
+fn printable(line: &str) -> Result<Record, ParserError> {
+    if line.split_ascii_whitespace().count() < MIN_PARTS_COUNT {
+        return Err(ParserError("Invalid line size".into()));
+    }
+
     let mut items = line.split_ascii_whitespace();
     let (date, hour) = (
         items.next().unwrap_or("01-01"),
         items.next().unwrap_or("00:00"),
     );
 
-    let (process, thread) = (items.next().unwrap_or("0"), items.next().unwrap_or("0"));
-    let level = level(items.next().unwrap_or("D"));
+    let (process, thread) = (items.next().unwrap(), items.next().unwrap());
+    if !(process.chars().all(char::is_numeric) && process.chars().all(char::is_numeric)) {
+        return Err(ParserError(
+            "Invalid Process/Thread ID: Pid {process}, Thread {thread}".into(),
+        ));
+    }
+    let level = level(items.next().unwrap())?;
     let tag = {
         // Basically a take_while(':') but considering the failing match too.
         let mut list: Vec<&str> = vec![];
@@ -76,16 +88,16 @@ fn printable(line: &str) -> IResult<&str, Record> {
     let message = items.collect::<Vec<&str>>().join(" ");
 
     let rec = Record {
+        raw: line.into(),
         time: Some(format!("{date} {hour}")),
         message: message.trim().to_owned(),
         level,
         tag: tag.trim().to_owned(),
         process: process.trim().to_owned(),
         thread: thread.trim().to_owned(),
-        ..Default::default()
     };
 
-    Ok((line, rec))
+    Ok(rec)
 }
 
 pub fn bugreport_section(line: &str) -> IResult<&str, (String, String)> {
@@ -101,12 +113,7 @@ pub struct DefaultParser;
 
 impl FormatParser for DefaultParser {
     fn try_parse_str(&self, line: &str) -> Result<Record, ParserError> {
-        printable(line)
-            .map(|(_, mut v)| {
-                v.raw = line.into();
-                v
-            })
-            .map_err(|e| ParserError(format!("{e}")))
+        printable(line).map_err(|e| ParserError(format!("{e}")))
     }
 }
 
@@ -184,14 +191,16 @@ impl Parser {
 }
 
 #[test]
-fn parse_level() {
-    assert_eq!(level("V"), Level::Verbose);
-    assert_eq!(level("D"), Level::Debug);
-    assert_eq!(level("I"), Level::Info);
-    assert_eq!(level("W"), Level::Warn);
-    assert_eq!(level("E"), Level::Error);
-    assert_eq!(level("F"), Level::Fatal);
-    assert_eq!(level("A"), Level::Assert);
+fn parse_level() -> Result<(), ParserError> {
+    assert_eq!(level("V")?, Level::Verbose);
+    assert_eq!(level("D")?, Level::Debug);
+    assert_eq!(level("I")?, Level::Info);
+    assert_eq!(level("W")?, Level::Warn);
+    assert_eq!(level("E")?, Level::Error);
+    assert_eq!(level("F")?, Level::Fatal);
+    assert_eq!(level("A")?, Level::Assert);
+    assert!(level("INEXISTENT").is_err());
+    Ok(())
 }
 
 #[test]

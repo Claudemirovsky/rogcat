@@ -348,7 +348,7 @@ impl<T: Write + std::marker::Unpin> Sink<Record> for FormatSink<T> {
         Poll::Ready(Ok(()))
     }
 
-    fn start_send(mut self: Pin<&mut Self>, item: Record) -> Result<(), Self::Error> {
+    fn start_send(self: Pin<&mut Self>, item: Record) -> Result<(), Self::Error> {
         let this = self.get_mut();
         this.sink
             .write_all(this.format.fmt_record(&item)?.as_bytes())?;
