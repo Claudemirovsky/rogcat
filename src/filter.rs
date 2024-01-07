@@ -18,6 +18,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+use std::{collections::HashSet, iter::FromIterator};
+
 use crate::{profiles::Profile, reader::get_processes_pids};
 use clap::ArgMatches;
 use failure::{format_err, Error};
@@ -149,9 +151,9 @@ impl FilterGroup {
         merge: T,
         ignore_case: bool,
     ) -> Result<FilterGroup, Error> {
-        let mut filters: Vec<&str> = args
+        let mut filters: HashSet<&str> = args
             .values_of(flag)
-            .map(Iterator::collect)
+            .map(HashSet::from_iter)
             .unwrap_or_default();
         filters.extend(merge);
 
