@@ -49,7 +49,7 @@ use url::Url;
 /// A spawned child process that implements LogStream
 struct Process {
     cmd: Vec<String>,
-    /// Respawn cmd upone termination
+    /// Respawn cmd upon termination
     respawn: bool,
     child: Option<Child>,
     stream: Option<Pin<LogStream>>,
@@ -160,7 +160,6 @@ pub async fn get_processes_pids(processes: &[String]) -> Vec<String> {
         .spawn()
         .expect("Failed to launch adb");
     let stdout = BufReader::new(command.stdout.unwrap());
-    let mut items: Vec<String> = vec![];
     let future = LinesStream::new(stdout.lines())
         .skip(1)
         .filter_map(|x| async move {
@@ -180,14 +179,9 @@ pub async fn get_processes_pids(processes: &[String]) -> Vec<String> {
             } else {
                 None
             }
-        })
-        .for_each(|pid| {
-            items.push(pid);
-            futures::future::ready(())
         });
 
-    future.await;
-    items
+    future.collect::<Vec<String>>().await
 }
 
 /// Start a process and stream it stdout
@@ -229,7 +223,6 @@ pub fn logcat(args: &ArgMatches) -> Result<LogStream, Error> {
         cmd.push("-b".into());
         cmd.push(buffer);
     }
-    println!("In logcat, before return");
 
     Ok(Box::new(Process::with_cmd(cmd, respawn)))
 }
@@ -281,11 +274,9 @@ impl Stream for Process {
     type Item = StreamData;
 
     fn poll_next(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Option<StreamData>> {
-        // TODO: Fix this thing calling running the ELSE branch as if
-        // it knew no tomorrows, when adb isn't connected to any device.
         if let Some(ref mut inner) = self.stream {
             match inner.poll_next_unpin(ctx) {
-                Poll::Ready(Some(_)) if self.respawn => self.spawn(ctx),
+                Poll::Ready(None) if self.respawn => self.spawn(ctx),
                 poll => poll,
             }
         } else {
