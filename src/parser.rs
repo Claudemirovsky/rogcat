@@ -22,8 +22,6 @@ use crate::record::{Level, Record};
 use csv::ReaderBuilder;
 use failure::Fail;
 
-use nom::{bytes::complete::take_until, character::complete::char, IResult};
-
 use serde_json::from_str;
 use std::{
     convert::Into,
@@ -98,15 +96,6 @@ fn printable(line: &str) -> Result<Record, ParserError> {
     };
 
     Ok(rec)
-}
-
-pub fn bugreport_section(line: &str) -> IResult<&str, (String, String)> {
-    let (line, logtag) = take_until("(")(line)?;
-    let (line, _) = char('(')(line)?;
-    let (line, msg) = take_until(")")(line)?;
-    let (line, _) = char(')')(line)?;
-
-    Ok((line, (logtag.to_string(), msg.to_string())))
 }
 
 pub struct DefaultParser;
