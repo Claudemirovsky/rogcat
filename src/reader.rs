@@ -243,6 +243,10 @@ impl Process {
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
+            .map_err(|e| {
+                eprintln!("Failed to spawn process ({:?}): {e}", self.cmd);
+                std::process::exit(1);
+            })
             .unwrap();
 
         let stdout = BufReader::new(child.stdout.take().unwrap());

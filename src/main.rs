@@ -108,16 +108,19 @@ async fn run() -> Result<(), Error> {
         .map(Ok)
         .forward(sink);
 
-    tokio::spawn(async move {
-        future.await.unwrap();
-    });
+    tokio::spawn(async move { parse_result(future.await) });
     tokio::signal::ctrl_c().await.unwrap();
     Ok(())
 }
 
 #[tokio::main]
 async fn main() {
-    match run().await {
+    parse_result(run().await)
+}
+
+#[inline]
+fn parse_result(res: Result<(), Error>) {
+    match res {
         Err(e) => {
             eprintln!("{e}");
             exit(1)
