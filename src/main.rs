@@ -49,7 +49,10 @@ type LogSink = Box<dyn Sink<Record, Error = Error> + Send>;
 async fn run() -> Result<(), Error> {
     let args = cli::CliArguments::parse();
     utils::config_init();
-    subcommands::run(&args).await;
+    if let Some(subcommand) = args.subcommands {
+        subcommands::parse_subcommand(subcommand, args.device).await;
+        exit(0);
+    }
 
     let source = {
         if !args.input.is_empty() {

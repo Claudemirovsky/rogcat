@@ -52,16 +52,13 @@ use tokio::{
 use tokio_stream::wrappers::LinesStream;
 use zip::{write::FileOptions, CompressionMethod, ZipWriter};
 
-pub async fn run(args: &CliArguments) {
-    match &args.subcommands {
-        Some(SubCommands::BugReport(opts)) => {
-            bugreport(opts.to_owned(), args.device.to_owned()).await
-        }
-        Some(SubCommands::Clear(opts)) => clear(opts.to_owned()).await,
-        Some(SubCommands::Completions(opts)) => completions(opts.shell).await,
-        Some(SubCommands::Devices) => devices().await,
-        Some(SubCommands::Log(opts)) => log(opts.to_owned()).await.unwrap(),
-        None => (),
+pub async fn parse_subcommand(command: SubCommands, device: Option<String>) {
+    match command {
+        SubCommands::BugReport(opts) => bugreport(opts, device).await,
+        SubCommands::Clear(opts) => clear(opts).await,
+        SubCommands::Completions(opts) => completions(opts.shell).await,
+        SubCommands::Devices => devices().await,
+        SubCommands::Log(opts) => log(opts).await.unwrap(),
     }
 }
 
