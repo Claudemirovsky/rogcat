@@ -152,10 +152,6 @@ pub(crate) struct CliArguments {
 
 #[derive(Subcommand, Clone, Debug, PartialEq)]
 pub(crate) enum SubCommands {
-    /// Capture bugreport. This is only works for Android versions < 7.
-    #[clap(name = "bugreport")]
-    BugReport(BugReportOpts),
-
     /// Generates completion scripts.
     #[clap(name = "completions")]
     Completions(CompletionsOpts),
@@ -170,21 +166,6 @@ pub(crate) enum SubCommands {
 
     /// Add log message to logcat buffer.
     Log(LogOpts),
-}
-
-#[derive(Args, Debug, Clone, PartialEq)]
-pub(crate) struct BugReportOpts {
-    /// Zip report.
-    #[clap(long, short)]
-    pub(crate) zip: bool,
-
-    /// Overwrite report file if present.
-    #[clap(long)]
-    pub(crate) overwrite: bool,
-
-    /// Output file name - defaults to <now>-bugreport.
-    #[clap(name = "file", value_hint = ValueHint::FilePath)]
-    pub(crate) file: Option<PathBuf>,
 }
 
 #[derive(Args, Debug, Clone, PartialEq)]

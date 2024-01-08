@@ -81,16 +81,6 @@ To open a SocketCAN device and read frames run:
 
 SocketCAN is a Linux only thing.
 
-### Bugreport
-
-Capture a `Android` bugreport. This only works for `Android` version prior 7:
-
-`rogcat bugreport`
-
-Capture a `Android` bugreport and write (zipped) to `bugreport.zip`:
-
-`rogcat bugreport -z bugreport.zip`
-
 ### Log
 
 Write message "some text" into the device log buffer (e.g annotations during manual testing):
@@ -280,7 +270,6 @@ ARGS:
                  omitted, rogcat will run "adb logcat -b all" and restarts this commmand if 'adb' terminates
 
 SUBCOMMANDS:
-    bugreport      Capture bugreport. This is only works for Android versions < 7.
     clear          Clear logd buffers
     completions    Generates completion scripts
     devices        List available devices

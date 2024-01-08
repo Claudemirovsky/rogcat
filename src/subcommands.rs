@@ -19,42 +19,34 @@
 // SOFTWARE.
 
 use crate::{
-    cli::{BugReportOpts, ClearOpts, CliArguments, LogOpts, SubCommands},
+    cli::{ClearOpts, CliArguments, LogOpts, SubCommands},
     reader::stdin,
     utils::{self, adb},
     StreamData, DEFAULT_BUFFER,
 };
 use clap::{crate_name, CommandFactory};
 use clap_complete::{generate, Generator};
-use failure::{err_msg, Error};
+use failure::Error;
 use futures::{
     future::ready,
     sink::Sink,
     stream::StreamExt,
     task::{Context, Poll},
-    TryStreamExt,
 };
-use indicatif::{ProgressBar, ProgressStyle};
 use rogcat::record::Level;
 use std::{
     borrow::ToOwned,
-    fs::{DirBuilder, File},
-    io::Write,
-    path::{Path, PathBuf},
     pin::Pin,
     process::{exit, Stdio},
 };
-use time::{format_description, OffsetDateTime};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::Command,
 };
 use tokio_stream::wrappers::LinesStream;
-use zip::{write::FileOptions, CompressionMethod, ZipWriter};
 
-pub async fn parse_subcommand(command: SubCommands, device: Option<String>) {
+pub async fn parse_subcommand(command: SubCommands) {
     match command {
-        SubCommands::BugReport(opts) => bugreport(opts, device).await,
         SubCommands::Clear(opts) => clear(opts).await,
         SubCommands::Completions(opts) => completions(opts.shell).await,
         SubCommands::Devices => devices().await,
@@ -66,132 +58,6 @@ pub async fn completions<T: Generator>(shell: T) {
     let mut cmd = CliArguments::command();
     generate(shell, &mut cmd, crate_name!(), &mut std::io::stdout());
     exit(0);
-}
-
-struct ZipFile {
-    zip: ZipWriter<File>,
-}
-
-impl ZipFile {
-    fn create(filename: &PathBuf) -> Result<Self, Error> {
-        let mut name = filename.to_owned().into_os_string();
-        name.push(".zip");
-        let path: PathBuf = name.into();
-        let file = File::create(path)?;
-        let options = FileOptions::default()
-            .compression_method(CompressionMethod::Deflated)
-            .unix_permissions(0o644);
-        let f = filename
-            .file_name()
-            .and_then(std::ffi::OsStr::to_str)
-            .ok_or_else(|| err_msg("Failed to get filename"))?;
-        let mut zip = ZipWriter::new(file);
-        zip.start_file(f, options)?;
-        Ok(ZipFile { zip })
-    }
-}
-
-impl Write for ZipFile {
-    fn write(&mut self, buf: &[u8]) -> ::std::io::Result<usize> {
-        self.zip.write_all(buf).map(|_| buf.len())
-    }
-
-    fn flush(&mut self) -> ::std::io::Result<()> {
-        self.zip
-            .finish()
-            .map_err(std::convert::Into::into)
-            .map(|_| ())
-    }
-}
-
-impl Drop for ZipFile {
-    fn drop(&mut self) {
-        self.flush().expect("Failed to close zipfile");
-    }
-}
-
-fn report_file() -> Result<PathBuf, Error> {
-    #[cfg(not(windows))]
-    let sep = ":";
-    #[cfg(windows)]
-    let sep = "_";
-
-    let format = format!("[month]-[day]_[hour]{sep}[minute]{sep}[second]-bugreport.txt");
-    let desc = format_description::parse_borrowed::<2>(format.as_str())?;
-    let now = OffsetDateTime::now_local()?;
-    now.format(&desc).map_err(|x| x.into()).map(PathBuf::from)
-}
-
-/// Performs a dumpstate and write to fs. Note: The Android 7+ dumpstate is not supported.
-pub async fn bugreport(opts: BugReportOpts, device: Option<String>) {
-    let file_path = opts
-        .file
-        .unwrap_or_else(|| report_file().expect("Failed to generate filename"));
-
-    if !opts.overwrite && file_path.exists() {
-        eprintln!("File {} already exists", file_path.display());
-        exit(1);
-    }
-    let mut adb = adb().expect("Failed to find adb");
-
-    if let Some(device) = device {
-        adb.push("-s");
-        adb.push(device);
-    }
-
-    let child = Command::new(adb)
-        .arg("bugreport")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("Failed to launch adb");
-    let stdout = BufReader::new(child.stdout.unwrap());
-
-    let dir = file_path.parent().unwrap_or_else(|| Path::new(""));
-    if !dir.is_dir() {
-        DirBuilder::new()
-            .recursive(true)
-            .create(dir)
-            .expect("Failed to create outfile parent directory");
-    }
-
-    let progress = ProgressBar::new(::std::u64::MAX);
-    if let Ok(style) = ProgressStyle::default_bar()
-        .template("{spinner:.yellow} {msg:.dim.bold} {pos:>7.dim} {elapsed_precise:.dim}")
-    {
-        progress.set_style(style.progress_chars(" • "))
-    }
-    progress.set_message("Connecting");
-
-    let mut write = if opts.zip {
-        Box::new(ZipFile::create(&file_path).expect("Failed to create zip file")) as Box<dyn Write>
-    } else {
-        Box::new(File::create(&file_path).expect("Failed to craete file")) as Box<dyn Write>
-    };
-
-    progress.set_message("Pulling bugreport line");
-
-    // TODO: Migrate to tokio::fs::File
-    let output = LinesStream::new(stdout.lines()).try_for_each(|line| {
-        write.write_all(line.as_bytes()).expect("Failed to write");
-        write.write_all(b"\n").expect("Failed to write");
-        progress.inc(1);
-        ready(Ok(()))
-    });
-
-    match output.await {
-        Ok(_) => {
-            if let Ok(style) = ProgressStyle::default_bar().template("{msg:.dim.bold}") {
-                progress.set_style(style);
-            }
-            progress.finish_with_message(format!("Finished {}.", file_path.display()));
-            exit(0);
-        }
-        Err(e) => {
-            eprintln!("Failed to create bugreport: {e}");
-            exit(1);
-        }
-    }
 }
 
 pub async fn devices() {

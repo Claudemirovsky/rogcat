@@ -50,7 +50,7 @@ async fn run() -> Result<(), Error> {
     let args = cli::CliArguments::parse();
     utils::config_init();
     if let Some(subcommand) = args.subcommands {
-        subcommands::parse_subcommand(subcommand, args.device).await;
+        subcommands::parse_subcommand(subcommand).await;
         exit(0);
     }
 
