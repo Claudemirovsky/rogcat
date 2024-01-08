@@ -19,12 +19,12 @@
 // SOFTWARE.
 
 use crate::{
+    cli::CliArguments,
     profiles::Profile,
     utils::{config_get, terminal_width},
     LogSink,
 };
-use clap::{values_t, ArgMatches};
-use failure::{err_msg, format_err, Error};
+use failure::{format_err, Error};
 use futures::{
     sink::{Sink, SinkExt},
     task::{Context, Poll},
@@ -36,18 +36,17 @@ use std::{
     convert::Into,
     io::{stdout, BufWriter, Write},
     pin::Pin,
-    str::FromStr,
 };
 use termcolor::{Buffer, BufferWriter, Color, ColorChoice, ColorSpec, WriteColor};
 
 const DIMM_COLOR: Color = Color::Ansi256(243);
 
 /// Construct a terminal sink for format from args with give profile
-pub fn try_from(args: &ArgMatches<'_>, profile: &Profile) -> Result<LogSink, Error> {
+pub fn try_from(args: &CliArguments, profile: &Profile) -> Result<LogSink, Error> {
     let format = args
-        .value_of("format")
-        .ok_or_else(|| format_err!("Missing format argument"))
-        .and_then(|f| Format::from_str(f).map_err(err_msg))
+        .format
+        .as_ref()
+        .map(|it| it.to_owned())
         .unwrap_or(Format::Human);
 
     if format == Format::Html {
@@ -84,16 +83,17 @@ struct Human {
 }
 
 impl Human {
-    pub fn from(args: &ArgMatches<'_>, profile: &Profile, _: Format) -> Human {
-        let mut hl = profile.highlight.clone();
-        if args.is_present("highlight") {
-            hl.extend(values_t!(args.values_of("highlight"), String).unwrap());
+    pub fn from(args: &CliArguments, profile: &Profile, _: Format) -> Human {
+        let mut hl = profile.highlight.to_owned();
+        if !args.highlight.is_empty() {
+            hl.extend(args.highlight.to_owned());
         }
         let highlight = hl.iter().flat_map(|h| Regex::new(h)).collect();
 
         let color = {
             match args
-                .value_of("color")
+                .color
+                .as_deref()
                 .unwrap_or_else(|| config_get("terminal_color").unwrap_or("auto"))
             {
                 "always" => ColorChoice::Always,
@@ -108,12 +108,11 @@ impl Human {
                 _ => ColorChoice::Auto,
             }
         };
-        let no_dimm = args.is_present("no_dimm") || config_get("terminal_no_dimm").unwrap_or(false);
+        let no_dimm = args.no_dimm || config_get("terminal_no_dimm").unwrap_or(false);
         let tag_width = config_get("terminal_tag_width");
-        let hide_timestamp = args.is_present("hide_timestamp")
-            || config_get("terminal_hide_timestamp").unwrap_or(false);
-        let show_date =
-            args.is_present("show_date") || config_get("terminal_show_date").unwrap_or(false);
+        let hide_timestamp =
+            args.hide_timestamp || config_get("terminal_hide_timestamp").unwrap_or(false);
+        let show_date = args.show_date || config_get("terminal_show_date").unwrap_or(false);
         let date_format = if show_date {
             if hide_timestamp {
                 DateFormat::DateOnly
@@ -126,8 +125,8 @@ impl Human {
             DateFormat::HourOnly
         };
 
-        let bright_colors = args.is_present("bright_colors")
-            || config_get("terminal_bright_colors").unwrap_or(false);
+        let bright_colors =
+            args.bright_colors || config_get("terminal_bright_colors").unwrap_or(false);
 
         Human {
             writer: BufferWriter::stdout(color),

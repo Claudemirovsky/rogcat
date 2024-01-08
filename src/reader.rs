@@ -19,11 +19,11 @@
 // SOFTWARE.
 
 use crate::{
+    cli::CliArguments,
     lossy_lines::{lossy_lines, LossyLinesCodec},
     utils::{adb, config_get},
     LogStream, StreamData, DEFAULT_BUFFER,
 };
-use clap::{value_t, ArgMatches};
 use failure::{err_msg, format_err, Error};
 use futures::{
     stream::{iter, select},
@@ -56,13 +56,7 @@ struct Process {
 }
 
 /// Open a file and provide a stream of lines
-pub async fn files(args: &ArgMatches<'_>) -> Result<LogStream, Error> {
-    let files = args
-        .values_of("input")
-        .ok_or_else(|| err_msg("Missing input argument"))?
-        .map(PathBuf::from)
-        .collect::<Vec<PathBuf>>();
-
+pub async fn files(files: Vec<PathBuf>) -> Result<LogStream, Error> {
     let f = iter::<_>(files)
         .map(|f| async move {
             let file = File::open(f.clone())
@@ -89,7 +83,7 @@ pub fn stdin() -> LogStream {
 }
 
 /// Open a serial port and provide a stream of lines
-pub fn serial(_args: &ArgMatches) -> LogStream {
+pub fn serial() -> LogStream {
     unimplemented!()
 }
 
@@ -185,55 +179,50 @@ pub async fn get_processes_pids(processes: &[String]) -> Vec<String> {
 }
 
 /// Start a process and stream it stdout
-pub fn logcat(args: &ArgMatches) -> Result<LogStream, Error> {
+pub fn logcat(args: &CliArguments) -> Result<LogStream, Error> {
     let mut cmd = vec![adb()?.display().to_string()];
 
-    if args.is_present("dev") {
-        let device = value_t!(args, "dev", String).unwrap_or_else(|e| e.exit());
+    if let Some(device) = args.device.as_ref() {
         cmd.push("-s".into());
-        cmd.push(device);
+        cmd.push(device.to_owned());
     }
 
     cmd.push("logcat".into());
-    let mut respawn = args.is_present("restart") | config_get::<bool>("restart").unwrap_or(true);
+    let mut respawn = args.restart | config_get::<bool>("restart").unwrap_or(true);
 
-    if args.is_present("tail") {
-        let count = value_t!(args, "tail", u32).unwrap_or_else(|e| e.exit());
+    if let Some(count) = args.tail {
         cmd.push("-t".into());
         cmd.push(count.to_string());
         respawn = false;
     };
 
-    if args.is_present("dump") {
+    if args.dump {
         cmd.push("-d".into());
         respawn = false;
     }
 
-    if args.is_present("last") {
+    if args.last {
         cmd.push("--last".into());
         respawn = false;
     }
 
     for buffer in args
-        .values_of("buffer")
-        .map(|m| m.map(ToOwned::to_owned).collect::<Vec<String>>())
+        .buffer
+        .as_ref()
+        .map(|v| v.to_owned())
         .or_else(|| config_get("buffer"))
-        .unwrap_or_else(|| DEFAULT_BUFFER.iter().map(|&s| s.to_owned()).collect())
+        .unwrap_or_else(|| DEFAULT_BUFFER.iter().map(|&s| s.to_string()).collect())
     {
         cmd.push("-b".into());
-        cmd.push(buffer);
+        cmd.push(buffer.to_owned());
     }
 
     Ok(Box::new(Process::with_cmd(cmd, respawn)))
 }
 
 /// Start a process and stream it stdout
-pub fn process(args: &ArgMatches) -> Result<LogStream, Error> {
-    let respawn = args.is_present("restart");
-    let cmd = value_t!(args, "COMMAND", String)?
-        .split_whitespace()
-        .map(ToOwned::to_owned)
-        .collect();
+pub fn process(cmd: String, respawn: bool) -> Result<LogStream, Error> {
+    let cmd = cmd.split_whitespace().map(ToOwned::to_owned).collect();
     Ok(Box::new(Process::with_cmd(cmd, respawn)))
 }
 

@@ -18,6 +18,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+use clap::ValueEnum;
 use csv::WriterBuilder;
 use failure::{format_err, Error};
 use serde::{Deserialize, Serialize};
@@ -25,7 +26,8 @@ use std::{fmt::Display, str::FromStr};
 
 type StdResult<T, E> = std::result::Result<T, E>;
 
-#[derive(Clone, Debug, PartialEq)]
+/// Supported output formats enum.
+#[derive(Clone, Debug, PartialEq, ValueEnum)]
 pub enum Format {
     Csv,
     Html,
@@ -84,7 +86,7 @@ impl Display for Format {
     }
 }
 
-const LEVEL_VALUES: &[&str] = &[
+const LEVEL_VALUES: [&str; 14] = [
     "trace", "debug", "info", "warn", "error", "fatal", "assert", "T", "D", "I", "W", "E", "F", "A",
 ];
 
@@ -139,7 +141,7 @@ impl<'a> From<&'a str> for Level {
 }
 
 impl Level {
-    pub fn values() -> &'static [&'static str] {
+    pub fn values() -> [&'static str; 14] {
         LEVEL_VALUES
     }
 }

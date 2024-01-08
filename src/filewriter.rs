@@ -18,8 +18,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use crate::LogSink;
-use clap::ArgMatches;
+use crate::{cli::CliArguments, LogSink};
 use failure::{err_msg, format_err, Error};
 use futures::{
     sink::Sink,
@@ -73,11 +72,8 @@ trait Writer {
 }
 
 /// Crate a new log sink for given arguments
-pub fn try_from(args: &ArgMatches) -> Result<LogSink, Error> {
-    let format = args
-        .value_of("format")
-        .and_then(|f| Format::from_str(f).ok())
-        .unwrap_or(Format::Raw);
+pub fn try_from(args: CliArguments) -> Result<LogSink, Error> {
+    let format = args.format.as_ref().unwrap_or(&Format::Raw).to_owned();
 
     Ok(match format {
         Format::Csv | Format::Json | Format::Raw => {
@@ -110,14 +106,13 @@ impl Writer for Textfile {
     }
 }
 
-impl<'a, T: Writer> FileWriter<T> {
-    pub fn from_args(args: &ArgMatches<'a>, format: Format) -> Result<Self, Error> {
+impl<T: Writer> FileWriter<T> {
+    pub fn from_args(args: CliArguments, format: Format) -> Result<Self, Error> {
         let filename = args
-            .value_of("output")
-            .map(PathBuf::from)
+            .output
             .ok_or_else(|| err_msg("Invalid output filename!"))?;
 
-        let records_per_file = args.value_of("records_per_file").and_then(|l| {
+        let records_per_file = args.records_per_file.and_then(|ref l| {
             Regex::new(r"^(\d+)([kMG])$")
                 .unwrap()
                 .captures(l)
@@ -136,15 +131,15 @@ impl<'a, T: Writer> FileWriter<T> {
                 .or_else(|| usize::from_str(l).ok())
         });
 
-        let overwrite = args.is_present("overwrite");
+        let overwrite = args.overwrite;
 
         let records = records_per_file.unwrap_or(std::usize::MAX);
-        let filename_format = match args.value_of("filename_format") {
-            Some("enumerate") => FilenameFormat::Enumerate(overwrite, records),
-            Some("date") => FilenameFormat::Date(overwrite, records),
+        let filename_format = match args.filename_format.unwrap_or("".to_owned()).as_str() {
+            "enumerate" => FilenameFormat::Enumerate(overwrite, records),
+            "date" => FilenameFormat::Date(overwrite, records),
             // If records per file is set, default to enumerated even if
             // no file format argument is supplied.
-            Some(_) | None => {
+            _ => {
                 if let Some(n) = records_per_file {
                     FilenameFormat::Enumerate(overwrite, n)
                 } else {

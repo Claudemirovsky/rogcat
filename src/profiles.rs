@@ -18,8 +18,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use crate::utils;
-use clap::{value_t, ArgMatches};
+use crate::{cli::CliArguments, utils};
 use failure::{format_err, Error};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -47,8 +46,8 @@ pub struct Profile {
 
 /// Create a new Profiles instance from a give configuration file
 /// and default if file is not present or readable
-pub fn from_args(args: &ArgMatches) -> Result<Profile, Error> {
-    let file = file(Some(args))?;
+pub fn from_args(args: &CliArguments) -> Result<Profile, Error> {
+    let file = file(args.profiles_path.as_ref())?;
     if !file.exists() {
         Ok(Profile::default())
     } else {
@@ -67,12 +66,12 @@ pub fn from_args(args: &ArgMatches) -> Result<Profile, Error> {
             .collect();
 
         let mut profile = Profile::default();
-        if let Some(n) = args.value_of("profile") {
+        if let Some(selected) = args.profile.as_ref() {
             profile = profiles
-                .get(n)
-                .ok_or_else(|| format_err!("Unknown profile {}", n))?
+                .get(selected.as_str())
+                .ok_or_else(|| format_err!("Unknown profile {}", selected))?
                 .clone();
-            expand(n, &mut profile, &profiles)?;
+            expand(selected.as_str(), &mut profile, &profiles)?;
         } else if let Some(default_profile) = profiles.get(DEFAULT_PROFILE_NAME) {
             profile = default_profile.clone();
             expand(DEFAULT_PROFILE_NAME, &mut profile, &profiles)?;
@@ -107,20 +106,18 @@ fn expand(n: &str, p: &mut Profile, a: &HashMap<String, Profile>) -> Result<(), 
 }
 
 /// Return path to profile file by checking cli argument, env and default to configdir
-fn file(args: Option<&ArgMatches>) -> Result<PathBuf, Error> {
-    if let Some(args) = args {
-        if args.is_present("profiles_path") {
-            let f = PathBuf::from(value_t!(args, "profiles_path", String)?);
-            if f.exists() {
-                return Ok(f);
-            } else {
-                return Err(format_err!(
-                    "Cannot find {}. Use --profiles_path to specify the path manually!",
-                    f.display()
-                ));
-            }
+fn file(profile_path: Option<&PathBuf>) -> Result<PathBuf, Error> {
+    if let Some(path) = profile_path {
+        if path.exists() {
+            return Ok(path.to_owned());
+        } else {
+            return Err(format_err!(
+                "Cannot find {}. Use --profiles_path to specify the path manually!",
+                path.display()
+            ));
         }
     }
+
     if let Ok(f) = var("ROGCAT_PROFILES").map(PathBuf::from) {
         if f.exists() {
             Ok(f)

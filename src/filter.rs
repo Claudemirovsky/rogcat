@@ -20,8 +20,7 @@
 
 use std::{collections::HashSet, iter::FromIterator};
 
-use crate::{profiles::Profile, reader::get_processes_pids};
-use clap::ArgMatches;
+use crate::{cli::CliArguments, profiles::Profile, reader::get_processes_pids};
 use failure::{format_err, Error};
 use regex::Regex;
 use rogcat::record::{Level, Record};
@@ -39,9 +38,9 @@ pub struct Filter {
     regex: FilterGroup,
 }
 
-async fn get_all_pids(args: &ArgMatches<'_>, profile: &mut Profile) {
-    if let Some(processes) = args.values_of("process_name") {
-        processes.for_each(|proc| profile.process_name.push(proc.to_string()));
+async fn get_all_pids(procs: Option<Vec<String>>, profile: &mut Profile) {
+    if let Some(processes) = procs {
+        profile.process_name.extend(processes);
     }
     if !profile.process_name.is_empty() {
         profile
@@ -50,32 +49,28 @@ async fn get_all_pids(args: &ArgMatches<'_>, profile: &mut Profile) {
     }
 }
 
-pub async fn from_args_profile(
-    args: &ArgMatches<'_>,
-    profile: &mut Profile,
-) -> Result<Filter, Error> {
-    get_all_pids(args, profile).await;
-    let pid = profile.pid.iter().map(String::as_str);
-    let process_name = profile.process_name.iter().map(String::as_str);
-    let tag = profile.tag.iter().map(String::as_str);
-    let tag_ignorecase = profile.tag_ignore_case.iter().map(String::as_str);
-    let message = profile.message.iter().map(String::as_str);
-    let message_ignorecase = profile.message_ignore_case.iter().map(String::as_str);
-    let regex = profile.regex.iter().map(String::as_str);
+pub async fn from_args_profile(args: CliArguments, profile: &mut Profile) -> Result<Filter, Error> {
+    get_all_pids(args.process_name, profile).await;
+    let pid = profile.pid.iter();
+    let process_name = profile.process_name.iter();
+    let tag = profile.tag.iter();
+    let tag_ignorecase = profile.tag_ignore_case.iter();
+    let message = profile.message.iter();
+    let message_ignorecase = profile.message_ignore_case.iter();
+    let regex = profile.regex.iter();
     let filter = Filter {
-        level: Level::from(args.value_of("level").unwrap_or("")),
-        tag: FilterGroup::from_args(args, "tag", tag, false)?,
-        tag_ignore_case: FilterGroup::from_args(args, "tag-ignore-case", tag_ignorecase, true)?,
-        message: FilterGroup::from_args(args, "message", message, false)?,
+        level: Level::from(args.level.unwrap_or("".to_string()).as_str()),
+        tag: FilterGroup::from_args(&args.tag, tag, false)?,
+        tag_ignore_case: FilterGroup::from_args(&args.tag_ignore_case, tag_ignorecase, true)?,
+        message: FilterGroup::from_args(&args.message, message, false)?,
         message_ignore_case: FilterGroup::from_args(
-            args,
-            "message-ignore-case",
+            &args.message_ignore_case,
             message_ignorecase,
             true,
         )?,
-        pid: FilterGroup::from_args(args, "pid", pid, false)?,
-        process_name: FilterGroup::from_args(args, "process_name", process_name, false)?,
-        regex: FilterGroup::from_args(args, "regex_filter", regex, false)?,
+        pid: FilterGroup::from_args(&args.pid, pid, false)?,
+        process_name: FilterGroup::from_args(&Vec::new(), process_name, false)?,
+        regex: FilterGroup::from_args(&args.regex_filter, regex, false)?,
     };
 
     Ok(filter)
@@ -145,16 +140,12 @@ struct FilterGroup {
 }
 
 impl FilterGroup {
-    fn from_args<'a, T: Iterator<Item = &'a str>>(
-        args: &'a ArgMatches<'a>,
-        flag: &str,
+    fn from_args<'a, T: Iterator<Item = &'a String>>(
+        args: &'a [String],
         merge: T,
         ignore_case: bool,
     ) -> Result<FilterGroup, Error> {
-        let mut filters: HashSet<&str> = args
-            .values_of(flag)
-            .map(HashSet::from_iter)
-            .unwrap_or_default();
+        let mut filters: HashSet<&String> = HashSet::from_iter(args.iter());
         filters.extend(merge);
 
         let mut positive = vec![];

@@ -18,10 +18,11 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+use clap::Parser;
 use failure::Error;
 use futures::{future::ready, Sink, Stream, StreamExt};
 use rogcat::{parser, record::Record};
-use std::{process::exit, str::FromStr};
+use std::process::exit;
 use url::Url;
 
 mod cli;
@@ -46,28 +47,28 @@ type LogStream = Box<dyn Stream<Item = StreamData> + Send>;
 type LogSink = Box<dyn Sink<Record, Error = Error> + Send>;
 
 async fn run() -> Result<(), Error> {
-    let args = cli::cli().get_matches();
+    let args = cli::CliArguments::parse();
     utils::config_init();
     subcommands::run(&args).await;
 
     let source = {
-        if args.is_present("input") {
-            reader::files(&args).await?
+        if !args.input.is_empty() {
+            reader::files(args.input.clone()).await?
         } else {
-            match args.value_of("COMMAND") {
-                Some(c) => {
-                    if c == "-" {
+            match args.command.clone() {
+                Some(command) => {
+                    if command == "-" {
                         reader::stdin()
-                    } else if let Ok(url) = Url::parse(c) {
+                    } else if let Ok(url) = Url::parse(command.as_str()) {
                         match url.scheme() {
                             #[cfg(target_os = "linux")]
                             "can" => reader::can(url.host_str().expect("Invalid can device"))?,
                             "tcp" => reader::tcp(&url).await?,
-                            "serial" => reader::serial(&args),
-                            _ => reader::process(&args)?,
+                            "serial" => reader::serial(),
+                            _ => reader::process(command, args.restart)?,
                         }
                     } else {
-                        reader::process(&args)?
+                        reader::process(command, args.restart)?
                     }
                 }
                 None => reader::logcat(&args)?,
@@ -76,18 +77,16 @@ async fn run() -> Result<(), Error> {
     };
 
     let mut profile = profiles::from_args(&args)?;
-    let sink = Box::into_pin(if args.is_present("output") {
-        filewriter::try_from(&args)?
+    let sink = Box::into_pin(if args.output.is_some() {
+        filewriter::try_from(args.clone())?
     } else {
         terminal::try_from(&args, &profile)?
     });
 
     // Stop process after n records if argument head is passed
-    let mut head = args
-        .value_of("head")
-        .map(|v| usize::from_str(v).expect("Invalid head arguement"));
+    let mut head = args.head;
 
-    let mut filter = filter::from_args_profile(&args, &mut profile).await?;
+    let mut filter = filter::from_args_profile(args, &mut profile).await?;
     println!("Filter -> {:?}", filter);
     let mut parser = parser::Parser::default();
 

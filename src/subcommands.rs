@@ -19,12 +19,13 @@
 // SOFTWARE.
 
 use crate::{
-    cli::cli,
+    cli::{BugReportOpts, ClearOpts, CliArguments, LogOpts, SubCommands},
     reader::stdin,
     utils::{self, adb},
     StreamData, DEFAULT_BUFFER,
 };
-use clap::{crate_name, value_t, ArgMatches};
+use clap::{crate_name, CommandFactory};
+use clap_complete::{generate, Generator};
 use failure::{err_msg, Error};
 use futures::{
     future::ready,
@@ -51,31 +52,23 @@ use tokio::{
 use tokio_stream::wrappers::LinesStream;
 use zip::{write::FileOptions, CompressionMethod, ZipWriter};
 
-pub async fn run(args: &ArgMatches<'_>) {
-    match args.subcommand() {
-        ("bugreport", Some(sub_matches)) => bugreport(sub_matches).await,
-        ("clear", Some(sub_matches)) => clear(sub_matches).await,
-        ("completions", Some(sub_matches)) => completions(sub_matches).await,
-        ("devices", _) => devices().await,
-        ("log", Some(sub_matches)) => log(sub_matches).await.unwrap(),
-        (_, _) => (),
+pub async fn run(args: &CliArguments) {
+    match &args.subcommands {
+        Some(SubCommands::BugReport(opts)) => {
+            bugreport(opts.to_owned(), args.device.to_owned()).await
+        }
+        Some(SubCommands::Clear(opts)) => clear(opts.to_owned()).await,
+        Some(SubCommands::Completions(opts)) => completions(opts.shell).await,
+        Some(SubCommands::Devices) => devices().await,
+        Some(SubCommands::Log(opts)) => log(opts.to_owned()).await.unwrap(),
+        None => (),
     }
 }
 
-pub async fn completions(args: &ArgMatches<'_>) {
-    if let Err(e) = args
-        .value_of("shell")
-        .ok_or_else(|| err_msg("Required shell argument is missing"))
-        .map(str::parse)
-        .map(|s| {
-            cli().gen_completions_to(crate_name!(), s.unwrap(), &mut std::io::stdout());
-        })
-    {
-        eprintln!("Failed to get shell argument: {e}");
-        exit(1);
-    } else {
-        exit(0);
-    }
+pub async fn completions<T: Generator>(shell: T) {
+    let mut cmd = CliArguments::command();
+    generate(shell, &mut cmd, crate_name!(), &mut std::io::stdout());
+    exit(0);
 }
 
 struct ZipFile {
@@ -83,13 +76,15 @@ struct ZipFile {
 }
 
 impl ZipFile {
-    fn create(filename: &str) -> Result<Self, Error> {
-        let file = File::create(format!("{filename}.zip"))?;
+    fn create(filename: &PathBuf) -> Result<Self, Error> {
+        let mut name = filename.to_owned().into_os_string();
+        name.push(".zip");
+        let path: PathBuf = name.into();
+        let file = File::create(path)?;
         let options = FileOptions::default()
             .compression_method(CompressionMethod::Deflated)
             .unix_permissions(0o644);
-        let filename_path = PathBuf::from(&filename);
-        let f = filename_path
+        let f = filename
             .file_name()
             .and_then(std::ffi::OsStr::to_str)
             .ok_or_else(|| err_msg("Failed to get filename"))?;
@@ -118,7 +113,7 @@ impl Drop for ZipFile {
     }
 }
 
-fn report_filename() -> Result<String, Error> {
+fn report_file() -> Result<PathBuf, Error> {
     #[cfg(not(windows))]
     let sep = ":";
     #[cfg(windows)]
@@ -127,23 +122,23 @@ fn report_filename() -> Result<String, Error> {
     let format = format!("[month]-[day]_[hour]{sep}[minute]{sep}[second]-bugreport.txt");
     let desc = format_description::parse_borrowed::<2>(format.as_str())?;
     let now = OffsetDateTime::now_local()?;
-    now.format(&desc).map_err(|x| x.into())
+    now.format(&desc).map_err(|x| x.into()).map(PathBuf::from)
 }
 
 /// Performs a dumpstate and write to fs. Note: The Android 7+ dumpstate is not supported.
-pub async fn bugreport(args: &ArgMatches<'_>) {
-    let filename = value_t!(args.value_of("file"), String)
-        .unwrap_or_else(|_| report_filename().expect("Failed to generate filename"));
-    let filename_path = PathBuf::from(&filename);
-    if !args.is_present("overwrite") && filename_path.exists() {
-        eprintln!("File {filename} already exists");
+pub async fn bugreport(opts: BugReportOpts, device: Option<String>) {
+    let file_path = opts
+        .file
+        .unwrap_or_else(|| report_file().expect("Failed to generate filename"));
+
+    if !opts.overwrite && file_path.exists() {
+        eprintln!("File {} already exists", file_path.display());
         exit(1);
     }
     let mut adb = adb().expect("Failed to find adb");
 
-    if args.is_present("dev") {
-        let device = value_t!(args, "dev", String).unwrap_or_else(|e| e.exit());
-        adb.push::<String>("-s".into());
+    if let Some(device) = device {
+        adb.push("-s");
         adb.push(device);
     }
 
@@ -155,7 +150,7 @@ pub async fn bugreport(args: &ArgMatches<'_>) {
         .expect("Failed to launch adb");
     let stdout = BufReader::new(child.stdout.unwrap());
 
-    let dir = filename_path.parent().unwrap_or_else(|| Path::new(""));
+    let dir = file_path.parent().unwrap_or_else(|| Path::new(""));
     if !dir.is_dir() {
         DirBuilder::new()
             .recursive(true)
@@ -171,10 +166,10 @@ pub async fn bugreport(args: &ArgMatches<'_>) {
     );
     progress.set_message("Connecting");
 
-    let mut write = if args.is_present("zip") {
-        Box::new(ZipFile::create(&filename).expect("Failed to create zip file")) as Box<dyn Write>
+    let mut write = if opts.zip {
+        Box::new(ZipFile::create(&file_path).expect("Failed to create zip file")) as Box<dyn Write>
     } else {
-        Box::new(File::create(&filename).expect("Failed to craete file")) as Box<dyn Write>
+        Box::new(File::create(&file_path).expect("Failed to craete file")) as Box<dyn Write>
     };
 
     progress.set_message("Pulling bugreport line");
@@ -190,7 +185,7 @@ pub async fn bugreport(args: &ArgMatches<'_>) {
     match output.await {
         Ok(_) => {
             progress.set_style(ProgressStyle::default_bar().template("{msg:.dim.bold}"));
-            progress.finish_with_message(&format!("Finished {}.", filename_path.display()));
+            progress.finish_with_message(&format!("Finished {}.", file_path.display()));
             exit(0);
         }
         Err(e) => {
@@ -279,10 +274,10 @@ impl Sink<String> for Logger {
 }
 
 /// Call something like adb shell log <message>
-pub async fn log(args: &ArgMatches<'_>) -> Result<(), Error> {
-    let message = args.value_of("MESSAGE").unwrap_or("");
-    let tag = args.value_of("tag").unwrap_or("Rogcat").to_owned();
-    let level = Level::from(args.value_of("level").unwrap_or(""));
+pub async fn log(args: LogOpts) -> Result<(), Error> {
+    let message = args.message.as_str();
+    let tag = args.tag.unwrap_or("Rogcat".to_string());
+    let level = Level::from(args.level.unwrap_or("".to_string()).as_str());
     match message {
         "-" => {
             let sink = Logger { tag, level };
@@ -315,10 +310,9 @@ pub async fn log(args: &ArgMatches<'_>) -> Result<(), Error> {
 }
 
 /// Call adb logcat -c -b BUFFERS
-pub async fn clear(args: &ArgMatches<'_>) {
+pub async fn clear(args: ClearOpts) {
     let buffer = args
-        .values_of("buffer")
-        .map(|m| m.map(ToOwned::to_owned).collect::<Vec<String>>())
+        .buffer
         .or_else(|| utils::config_get("buffer"))
         .unwrap_or_else(|| DEFAULT_BUFFER.iter().map(|&s| s.to_owned()).collect())
         .join(" -b ");
