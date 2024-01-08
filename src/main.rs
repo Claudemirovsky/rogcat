@@ -87,7 +87,6 @@ async fn run() -> Result<(), Error> {
     let mut head = args.head;
 
     let mut filter = filter::from_args_profile(args, &mut profile).await?;
-    println!("Filter -> {:?}", filter);
     let mut parser = parser::Parser::default();
 
     let future = Box::into_pin(source)
