@@ -162,11 +162,9 @@ impl<T: Writer> FileWriter<T> {
                     "{spinner:.yellow} {msg:.dim.bold} {pos:>7.dim} {elapsed_precise:.dim}",
                 )
             };
-            pb.set_style(
-                ProgressStyle::default_bar()
-                    .template(template)
-                    .progress_chars(chars),
-            );
+            if let Ok(style) = ProgressStyle::default_bar().template(template) {
+                pb.set_style(style.progress_chars(chars));
+            }
             pb
         };
 
@@ -288,7 +286,7 @@ impl<T: Writer> FileWriter<T> {
                 self.current_filename = self.next_file()?;
                 let mut writer = T::with_file_format(&self.current_filename, &self.format)?;
                 let message = format!("Writing {}", self.current_filename.display());
-                self.progress.set_message(&message);
+                self.progress.set_message(message);
                 writer.write(record, self.index)?;
                 self.index += 1;
                 self.writer = Some(Box::new(writer));
@@ -314,10 +312,11 @@ impl<T: Writer> FileWriter<T> {
         if let Some(ref mut writer) = self.writer {
             writer.flush()?;
         }
+        if let Ok(style) = ProgressStyle::default_bar().template("{msg:.dim.bold}") {
+            self.progress.set_style(style);
+        }
         self.progress
-            .set_style(ProgressStyle::default_bar().template("{msg:.dim.bold}"));
-        self.progress
-            .finish_with_message(&format!("Dumped {} records", self.index));
+            .finish_with_message(format!("Dumped {} records", self.index));
         self.file_size = 0;
         self.writer.take();
         Ok(())
@@ -346,11 +345,11 @@ impl<T: Writer> Sink<Record> for FileWriter<T> {
 
 mod html {
     use super::Writer;
-    use crc::{crc32, Hasher32};
+    use crc::Crc;
     use failure::{format_err, Error};
     use handlebars::{
         to_json, Context, Handlebars, Helper, HelperResult, JsonRender, Output, RenderContext,
-        RenderError,
+        RenderErrorReason,
     };
     use rogcat::record::{Format, Record};
     use serde::Serialize;
@@ -360,6 +359,8 @@ mod html {
         path::{Path, PathBuf},
         str,
     };
+
+    const CRC_TABLE: Crc<u32> = Crc::<u32>::new(&crc::CRC_32_ISO_HDLC);
 
     #[derive(Serialize)]
     struct HtmlRecord {
@@ -376,9 +377,9 @@ mod html {
     impl Html {
         // TODO: ensure readability
         fn hash_color(value: &str) -> String {
-            let mut digest = crc32::Digest::new(crc32::IEEE);
-            digest.write(value.as_bytes());
-            let h = digest.sum32();
+            let mut digest = CRC_TABLE.digest();
+            digest.update(value.as_bytes());
+            let h = digest.finalize();
             let r = h & 0xFF;
             let g = (h & 0xFF00) >> 8;
             let b = (h & 0xFF_0000) >> 16;
@@ -391,9 +392,9 @@ mod html {
             _: &mut RenderContext,
             out: &mut dyn Output,
         ) -> HelperResult {
-            let param = h
-                .param(0)
-                .ok_or_else(|| RenderError::new("Param 0 is required for format helper."))?;
+            let param = h.param(0).ok_or_else(|| {
+                RenderErrorReason::Other("Param 0 is required for format helper.".to_string())
+            })?;
             let value = param.value().render();
             let rendered = if value.is_empty() || value == "0" {
                 format!("<span style=\"color:grey\">{value}</span>")

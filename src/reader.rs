@@ -32,9 +32,7 @@ use futures::{
 };
 #[cfg(target_os = "linux")]
 use rogcat::record::Record;
-use std::{
-    borrow::ToOwned, convert::Into, net::ToSocketAddrs, path::PathBuf, pin::Pin, process::Stdio,
-};
+use std::{borrow::ToOwned, convert::Into, path::PathBuf, pin::Pin, process::Stdio};
 use time::{macros::format_description, OffsetDateTime};
 use tokio::{
     fs::File,
@@ -126,10 +124,10 @@ pub fn can(dev: &str) -> Result<LogStream, Error> {
 }
 
 /// Connect to tcp socket and profile a stream of lines
-pub async fn tcp(addr: &Url) -> Result<LogStream, Error> {
-    let addr = addr
-        .to_socket_addrs()?
-        .next()
+pub async fn tcp(url: &Url) -> Result<LogStream, Error> {
+    let addrs = url.socket_addrs(|| None)?;
+    let addr = addrs
+        .first()
         .ok_or_else(|| err_msg("Failed to parse addr"))?;
     let tcp = TcpStream::connect(&addr)
         .await

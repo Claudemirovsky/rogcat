@@ -159,11 +159,11 @@ pub async fn bugreport(opts: BugReportOpts, device: Option<String>) {
     }
 
     let progress = ProgressBar::new(::std::u64::MAX);
-    progress.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.yellow} {msg:.dim.bold} {pos:>7.dim} {elapsed_precise:.dim}")
-            .progress_chars(" • "),
-    );
+    if let Ok(style) = ProgressStyle::default_bar()
+        .template("{spinner:.yellow} {msg:.dim.bold} {pos:>7.dim} {elapsed_precise:.dim}")
+    {
+        progress.set_style(style.progress_chars(" • "))
+    }
     progress.set_message("Connecting");
 
     let mut write = if opts.zip {
@@ -184,8 +184,10 @@ pub async fn bugreport(opts: BugReportOpts, device: Option<String>) {
 
     match output.await {
         Ok(_) => {
-            progress.set_style(ProgressStyle::default_bar().template("{msg:.dim.bold}"));
-            progress.finish_with_message(&format!("Finished {}.", file_path.display()));
+            if let Ok(style) = ProgressStyle::default_bar().template("{msg:.dim.bold}") {
+                progress.set_style(style);
+            }
+            progress.finish_with_message(format!("Finished {}.", file_path.display()));
             exit(0);
         }
         Err(e) => {
