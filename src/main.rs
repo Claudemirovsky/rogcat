@@ -111,8 +111,10 @@ async fn run() -> Result<(), Error> {
         .map(Ok)
         .forward(sink);
 
-    tokio::spawn(async move { parse_result(future.await) });
-    tokio::signal::ctrl_c().await.unwrap();
+    tokio::select! {
+        res = future => res?,
+        _ = tokio::signal::ctrl_c() => ()
+    }
     Ok(())
 }
 
