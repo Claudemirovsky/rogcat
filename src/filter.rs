@@ -83,7 +83,7 @@ impl Filter {
         }
 
         match record.tag.as_ref() {
-            "am_proc_start" => {
+            "am_proc_start" if !self.process_name.is_empty() => {
                 let parts = record.message.splitn(5, ',').collect::<Vec<&str>>();
                 let pid = parts[1];
                 let name = parts[3];
@@ -93,7 +93,7 @@ impl Filter {
                         .positive
                         .iter()
                         // Prevents adding duplicates
-                        .any(|x| x.to_string().contains(pid))
+                        .any(|x| x.is_match(pid))
                 {
                     self.pid.positive.push(Regex::new(pid).unwrap());
                     return true;
@@ -197,5 +197,9 @@ impl FilterGroup {
         }
 
         true
+    }
+
+    fn is_empty(&self) -> bool {
+        self.positive.is_empty() && self.negative.is_empty()
     }
 }
