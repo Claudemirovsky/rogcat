@@ -106,31 +106,34 @@ impl Writer for Textfile {
     }
 }
 
+#[inline]
+fn parse_human_number(number: Option<String>) -> Option<usize> {
+    number.and_then(|ref value| {
+        Regex::new(r"^(\d+)([kMG])?$")
+            .unwrap()
+            .captures(value)
+            .and_then(|caps| {
+                caps.get(1)
+                    .map(|num| num.as_str())
+                    .and_then(|size| usize::from_str(size).ok())
+                    .map(|size| (size, caps.get(2).map(|unit| unit.as_str())))
+            })
+            .map(|(size, suffix)| match suffix {
+                Some("k") => 1_000 * size,
+                Some("M") => 1_000_000 * size,
+                Some("G") => 1_000_000_000 * size,
+                _ => size,
+            })
+    })
+}
+
 impl<T: Writer> FileWriter<T> {
     pub fn from_args(args: CliArguments, format: Format) -> Result<Self, Error> {
         let filename = args
             .output
             .ok_or_else(|| err_msg("Invalid output filename!"))?;
 
-        let records_per_file = args.records_per_file.and_then(|ref l| {
-            Regex::new(r"^(\d+)([kMG])$")
-                .unwrap()
-                .captures(l)
-                .and_then(|caps| {
-                    caps.get(1)
-                        .map(|m| m.as_str())
-                        .and_then(|size| usize::from_str(size).ok())
-                        .map(|size| (size, caps.get(2).map(|m| m.as_str())))
-                })
-                .and_then(|(size, suffix)| match suffix {
-                    Some("k") => Some(1_000 * size),
-                    Some("M") => Some(1_000_000 * size),
-                    Some("G") => Some(1_000_000_000 * size),
-                    _ => None,
-                })
-                .or_else(|| usize::from_str(l).ok())
-        });
-
+        let records_per_file = parse_human_number(args.records_per_file);
         let overwrite = args.overwrite;
 
         let records = records_per_file.unwrap_or(std::usize::MAX);
