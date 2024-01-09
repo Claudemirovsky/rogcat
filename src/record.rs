@@ -124,18 +124,22 @@ impl Display for Level {
     }
 }
 
-impl<'a> From<&'a str> for Level {
-    fn from(s: &str) -> Self {
-        match s {
-            "T" | "trace" => Level::Trace,
-            "V" | "verbose" => Level::Verbose,
-            "D" | "debug" => Level::Debug,
-            "I" | "info" => Level::Info,
-            "W" | "warn" => Level::Warn,
-            "E" | "error" => Level::Error,
-            "F" | "fatal" => Level::Fatal,
-            "A" | "assert" => Level::Assert,
-            _ => Level::None,
+impl From<Option<String>> for Level {
+    fn from(level: Option<String>) -> Self {
+        if let Some(lvl) = level {
+            match lvl.as_str() {
+                "T" | "trace" => Level::Trace,
+                "V" | "verbose" => Level::Verbose,
+                "D" | "debug" => Level::Debug,
+                "I" | "info" => Level::Info,
+                "W" | "warn" => Level::Warn,
+                "E" | "error" => Level::Error,
+                "F" | "fatal" => Level::Fatal,
+                "A" | "assert" => Level::Assert,
+                _ => Level::None,
+            }
+        } else {
+            Level::None
         }
     }
 }

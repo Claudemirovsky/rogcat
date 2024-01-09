@@ -142,7 +142,7 @@ impl Sink<String> for Logger {
 pub async fn log(args: LogOpts) -> Result<(), Error> {
     let message = args.message.as_str();
     let tag = args.tag.unwrap_or("Rogcat".to_string());
-    let level = Level::from(args.level.unwrap_or("".to_string()).as_str());
+    let level = Level::from(args.level);
     match message {
         "-" => {
             let sink = Logger { tag, level };

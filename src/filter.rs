@@ -59,7 +59,7 @@ pub async fn from_args_profile(args: CliArguments, profile: &mut Profile) -> Res
     let message_ignorecase = profile.message_ignore_case.iter();
     let regex = profile.regex.iter();
     let filter = Filter {
-        level: Level::from(args.level.unwrap_or("".to_string()).as_str()),
+        level: Level::from(args.level),
         tag: FilterGroup::from_args(&args.tag, tag, false)?,
         tag_ignore_case: FilterGroup::from_args(&args.tag_ignore_case, tag_ignorecase, true)?,
         message: FilterGroup::from_args(&args.message, message, false)?,
