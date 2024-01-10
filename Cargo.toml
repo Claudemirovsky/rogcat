@@ -45,8 +45,9 @@ handlebars = "5.0.0"
 indicatif = "0.17.7"
 lazy_static = "1.4.0"
 regex = "1.10.2"
-serde = { version = "1.0.195", features = ['derive'] }
+serde = { version = "1.0.195", features = ["derive"] }
 serde_json = "1.0.111"
+tabled = { version = "0.15.0", features = ["std"], default-features = false }
 term_size = "0.3.2"
 termcolor = "1.4.0"
 time = { version = "0.3.31", features = ["macros", "local-offset", "formatting"] }

@@ -20,6 +20,7 @@
 
 use crate::{
     cli::{ClearOpts, CliArguments, LogOpts, SubCommands},
+    profiles::profiles_list,
     reader::stdin,
     utils::{self, adb},
     StreamData, DEFAULT_BUFFER,
@@ -36,9 +37,15 @@ use futures::{
 use rogcat::record::Level;
 use std::{
     borrow::ToOwned,
+    path::PathBuf,
     pin::Pin,
     process::{exit, Stdio},
 };
+use tabled::{
+    builder::Builder,
+    settings::{object::Rows, Alignment, Style, Width},
+};
+
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::Command,
@@ -51,6 +58,7 @@ pub async fn parse_subcommand(command: SubCommands) {
         SubCommands::Completions(opts) => completions(opts.shell).await,
         SubCommands::Devices => devices().await,
         SubCommands::Log(opts) => log(opts).await.unwrap(),
+        SubCommands::Profiles(opts) => profiles(opts.profiles_path).unwrap(),
     }
 }
 
@@ -198,4 +206,38 @@ pub async fn clear(args: ClearOpts) {
             .code()
             .unwrap_or(1),
     );
+}
+
+pub fn profiles(path: Option<PathBuf>) -> Result<(), Error> {
+    let list = profiles_list(path.as_ref())?;
+    if list.is_empty() {
+        let profiles_path = utils::config_dir().join("profiles.toml");
+        eprintln!("No profiles found! Check your profiles file ({profiles_path:?}) or set a ROGCAT_PROFILES environment variable.");
+        exit(0)
+    }
+
+    // Table header
+    let mut items = vec![vec![String::from("PROFILE NAME"), String::from("COMMENT")]];
+    let mut values = list
+        .iter()
+        .map(|(name, profile)| {
+            let comment = match profile.comment.as_ref() {
+                Some(s) => s.as_str(),
+                None => "No comment",
+            };
+            vec![name.to_string(), comment.to_string()]
+        })
+        .collect::<Vec<Vec<String>>>();
+    values.sort_by(|a, b| a.first().partial_cmp(&b.first()).unwrap());
+
+    items.append(&mut values);
+
+    let mut table = Builder::from(items).build();
+    table
+        .with(Style::modern_rounded())
+        .with(Alignment::center())
+        .modify(Rows::new(1..), Width::wrap(50).keep_words());
+
+    println!("{table}");
+    Ok(())
 }

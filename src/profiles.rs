@@ -44,12 +44,10 @@ pub struct Profile {
     pub tag_ignore_case: Vec<String>,
 }
 
-/// Create a new Profiles instance from a give configuration file
-/// and default if file is not present or readable
-pub fn from_args(args: &CliArguments) -> Result<Profile, Error> {
-    let file = file(args.profiles_path.as_ref())?;
+pub fn profiles_list(profiles_path: Option<&PathBuf>) -> Result<HashMap<String, Profile>, Error> {
+    let file = file(profiles_path)?;
     if !file.exists() {
-        Ok(Profile::default())
+        Ok(HashMap::new())
     } else {
         let mut config = String::new();
         File::open(file.clone())
@@ -64,7 +62,16 @@ pub fn from_args(args: &CliArguments) -> Result<Profile, Error> {
             .drain()
             .map(|(k, v)| (k, v.into()))
             .collect();
-
+        Ok(profiles)
+    }
+}
+/// Create a new Profiles instance from a give configuration file
+/// and default if file is not present or readable
+pub fn from_args(args: &CliArguments) -> Result<Profile, Error> {
+    let profiles = profiles_list(args.profiles_path.as_ref())?;
+    if profiles.is_empty() {
+        Ok(Profile::default())
+    } else {
         let mut profile = Profile::default();
         if let Some(selected) = args.profile.as_ref() {
             profile = profiles
@@ -112,7 +119,7 @@ fn file(profile_path: Option<&PathBuf>) -> Result<PathBuf, Error> {
             return Ok(path.to_owned());
         } else {
             return Err(format_err!(
-                "Cannot find {}. Use --profiles_path to specify the path manually!",
+                "Cannot find {}. Use --profiles-path to specify the path manually!",
                 path.display()
             ));
         }

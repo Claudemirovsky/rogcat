@@ -153,19 +153,19 @@ pub(crate) struct CliArguments {
 #[derive(Subcommand, Clone, Debug, PartialEq)]
 pub(crate) enum SubCommands {
     /// Generates completion scripts.
-    #[clap(name = "completions")]
     Completions(CompletionsOpts),
 
     /// Clears logd buffers.
-    #[clap(name = "clear")]
     Clear(ClearOpts),
 
     /// Lists available devices.
-    #[clap(name = "devices")]
     Devices,
 
     /// Add log message to logcat buffer.
     Log(LogOpts),
+
+    /// Lists existing profiles
+    Profiles(ProfilesOpts),
 }
 
 #[derive(Args, Debug, Clone, PartialEq)]
@@ -194,4 +194,11 @@ pub(crate) struct LogOpts {
 
     #[clap(name = "MESSAGE", required = true)]
     pub(crate) message: String,
+}
+
+#[derive(Args, Debug, Clone, PartialEq)]
+pub(crate) struct ProfilesOpts {
+    /// Manually specify profile file (overrules ROGCAT_PROFILES).
+    #[clap(short = 'P', long, value_hint = ValueHint::FilePath)]
+    pub(crate) profiles_path: Option<PathBuf>,
 }
