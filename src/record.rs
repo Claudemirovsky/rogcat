@@ -86,8 +86,9 @@ impl Display for Format {
     }
 }
 
-const LEVEL_VALUES: [&str; 14] = [
-    "trace", "debug", "info", "warn", "error", "fatal", "assert", "T", "D", "I", "W", "E", "F", "A",
+const LEVEL_VALUES: [&str; 16] = [
+    "verbose", "trace", "debug", "info", "warn", "error", "fatal", "assert", "V", "T", "D", "I",
+    "W", "E", "F", "A",
 ];
 
 #[derive(Clone, Debug, Deserialize, PartialOrd, PartialEq, Serialize, Default)]
@@ -145,7 +146,7 @@ impl From<Option<String>> for Level {
 }
 
 impl Level {
-    pub fn values() -> [&'static str; 14] {
+    pub fn values() -> [&'static str; 16] {
         LEVEL_VALUES
     }
 }
