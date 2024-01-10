@@ -122,7 +122,7 @@ impl Sink<String> for Logger {
         Poll::Ready(Ok(()))
     }
 
-    fn start_send(self: Pin<&mut Self>, item: String) -> Result<(), Self::Error> {
+    fn start_send(self: Pin<&mut Self>, message: String) -> Result<(), Self::Error> {
         let child = Command::new(adb()?)
             .arg("shell")
             .arg("log")
@@ -130,7 +130,7 @@ impl Sink<String> for Logger {
             .arg(Self::level(&self.level))
             .arg("-t")
             .arg(format!("\"{}\"", &self.tag))
-            .arg(&item)
+            .arg(format!("\"{message}\""))
             .stdout(Stdio::piped())
             .output();
         tokio::spawn(child);
@@ -171,7 +171,7 @@ pub async fn log(args: LogOpts) -> Result<(), Error> {
                 .arg("-p")
                 .arg(Logger::level(&level))
                 .arg("-t")
-                .arg(&tag)
+                .arg(format!("\"{tag}\""))
                 .arg(format!("\"{message}\""))
                 .stdout(Stdio::piped())
                 .output()
