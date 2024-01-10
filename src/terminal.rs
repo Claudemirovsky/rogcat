@@ -242,6 +242,7 @@ impl Human {
         let pid_color = Self::hashed_color(&pid);
         let tid_color = Self::hashed_color(&tid);
         let level_color = match record.level {
+            Level::Debug => Some(Color::Cyan),
             Level::Info => Some(Color::Green),
             Level::Warn => Some(Color::Yellow),
             Level::Error | Level::Fatal | Level::Assert => Some(Color::Red),
