@@ -26,7 +26,7 @@ use regex::Regex;
 use rogcat::record::{Level, Record};
 
 /// Configured filters
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Filter {
     level: Level,
     tag: FilterGroup,
@@ -132,7 +132,7 @@ impl Filter {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct FilterGroup {
     ignore_case: bool,
     positive: Vec<Regex>,
@@ -202,4 +202,175 @@ impl FilterGroup {
     fn is_empty(&self) -> bool {
         self.positive.is_empty() && self.negative.is_empty()
     }
+
+    #[cfg(test)]
+    #[inline]
+    fn add_item(&mut self, regex: &str, positive: bool) {
+        let parsed = Regex::new(regex).unwrap();
+        if positive {
+            self.positive.push(parsed);
+        } else {
+            self.negative.push(parsed);
+        }
+    }
+}
+
+#[test]
+fn filtergroup_from_args() {
+    let sensitive = FilterGroup::from_args(
+        &[String::from("fish"), String::from("!pirarucu")],
+        Vec::new().iter(),
+        false,
+    )
+    .unwrap();
+    assert!(!sensitive.ignore_case);
+    assert!(!sensitive.positive.is_empty());
+    assert!(!sensitive.negative.is_empty());
+
+    let insensitive = FilterGroup::from_args(
+        &[String::from("tilapia"), String::from("crustacean")],
+        [
+            String::from("crustacean"),
+            String::from("tilapia"),
+            String::from("carp"),
+        ]
+        .iter(),
+        true,
+    )
+    .unwrap();
+    assert!(insensitive.ignore_case);
+    assert_eq!(insensitive.positive.len(), 3);
+    assert!(insensitive.negative.is_empty());
+
+    let invalid = FilterGroup::from_args(&[String::from(")(")], std::iter::empty(), true);
+    assert!(invalid.is_err());
+}
+
+#[test]
+fn level_filter() {
+    let mut filter = Filter {
+        level: Level::Warn,
+        ..Default::default()
+    };
+
+    let mut record = Record {
+        level: Level::Info,
+        ..Default::default()
+    };
+
+    // Info < Warn
+    assert!(!filter.filter(&record));
+
+    record.level = Level::Warn;
+    // Warn == Warn
+    assert!(filter.filter(&record));
+
+    record.level = Level::Fatal;
+    // Fatal > Warn
+    assert!(filter.filter(&record));
+}
+
+#[test]
+fn process_filter() {
+    let mut filter = Filter::default();
+
+    let mut record = Record {
+        message:
+            "[0,22551,10201,com.termux,pre-top-activity,{com.termux/com.termux.app.TermuxActivity}]"
+                .to_string(),
+        tag: "am_proc_start".to_string(),
+        ..Default::default()
+    };
+
+    // Default filter lets anything pass
+    assert!(filter.filter(&record));
+    // Prevent regression with the bug that added pids for no reason
+    assert!(filter.pid.is_empty());
+
+    // Filter the via browser
+    filter.process_name.add_item("mark.via.gp", true);
+
+    // Termux isn't what we want, so ignore it
+    assert!(!filter.filter(&record));
+
+    // Filter termux too
+    filter.process_name.add_item("com.termux", true);
+
+    assert!(filter.filter(&record));
+
+    // Checks if the pid was successfully added to the filter list
+    assert!(!filter.pid.is_empty());
+    assert!(filter.pid.positive.first().unwrap().is_match("22551"));
+
+    // Different pid = gtfo
+    record.process = "69420".to_string();
+    assert!(!filter.filter(&record));
+
+    // Remove pid when the process dies
+    record.tag = "am_proc_died".to_string();
+    record.message = "[0,22551,com.termux,800,10]".to_string();
+    assert!(filter.filter(&record));
+    assert!(filter.pid.is_empty());
+
+    filter.process_name.positive.clear();
+    // Just to make sure everything its passing
+    assert!(filter.filter(&record));
+
+    // Purge logs with this pid
+    filter.pid.add_item("69420", false);
+    assert!(!filter.filter(&record));
+}
+
+#[test]
+fn message_filter() {
+    let mut filter = Filter::default();
+    let mut record = Record {
+        message: "i HATE the antichrist".to_string(),
+        ..Default::default()
+    };
+
+    // yep it contains the message
+    filter.message.add_item("antichrist$", true);
+    assert!(filter.filter(&record));
+
+    // Doesnt contain our beloved message = gtfo
+    record.message = "i HATE java".to_string();
+    assert!(!filter.filter(&record));
+
+    filter.message.positive.clear();
+    filter.message_ignore_case.add_item("i\\shate", false);
+    filter.message_ignore_case.ignore_case = true;
+    assert!(!filter.filter(&record));
+
+    // Containing a positive and a negative match must return false
+    filter.message.add_item("java", true);
+    assert!(!filter.filter(&record));
+}
+
+#[test]
+fn filter_tag() {
+    let mut filter = Filter::default();
+
+    let mut record = Record {
+        tag: "rustmoment".to_string(),
+        ..Default::default()
+    };
+
+    // Basic positive/negative match
+    filter.tag.add_item("r[uU]st", true);
+    assert!(filter.filter(&record));
+
+    // Doesnt contain our wanted tag = gtfo
+    record.tag = "Aluminium".to_string();
+    assert!(!filter.filter(&record));
+
+    filter.tag.positive.clear();
+    // God I HATE aluminium
+    filter.tag.add_item("Alumin.um", false);
+    assert!(!filter.filter(&record));
+
+    filter.tag_ignore_case.ignore_case = true;
+    filter.tag_ignore_case.add_item("ur.+ium", true);
+    record.tag = "UrAnIuM".to_string();
+    assert!(filter.filter(&record));
 }
