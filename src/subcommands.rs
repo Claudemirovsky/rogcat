@@ -110,7 +110,8 @@ impl Logger {
             Level::Debug | Level::None => "d",
             Level::Info => "i",
             Level::Warn => "w",
-            Level::Error | Level::Fatal | Level::Assert => "e",
+            Level::Fatal => "f",
+            Level::Error | Level::Assert => "e",
         }
     }
 }
